@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Bindery — Turn image folders into PDFs</title>
+<meta name="description" content="Convert folders of book-page images into print-ready PDFs, entirely in your browser. Nothing is ever uploaded." />
+
+<link rel="stylesheet" href="css/styles.css?v=20260830-3" />
+</head>
+<body class="min-h-screen bg-canvas-50 text-canvas-800 dark:bg-canvas-950 dark:text-canvas-100 font-sans antialiased selection:bg-accent-500/30">
+
+  <!-- Unsupported-browser gate: shown only when the File System Access API is missing -->
+  <div id="unsupported-gate" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-canvas-50 dark:bg-canvas-950 px-6">
+    <div class="max-w-md w-full text-center animate-fade-up">
+      <div class="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-warn/10 text-warn">
+        <i data-lucide="triangle-alert" class="h-7 w-7"></i>
+      </div>
+      <h1 class="text-xl font-semibold tracking-tight text-canvas-900 dark:text-canvas-50">This browser can't run Bindery</h1>
+      <p class="mt-3 text-sm leading-relaxed text-canvas-500 dark:text-canvas-400">
+        Bindery reads and writes files directly on your computer using the File System Access API,
+        which is currently only available in Chromium-based browsers.
+      </p>
+      <p class="mt-4 text-sm leading-relaxed text-canvas-500 dark:text-canvas-400">
+        Please open this page in <span class="font-medium text-canvas-700 dark:text-canvas-200">Google Chrome</span> or
+        <span class="font-medium text-canvas-700 dark:text-canvas-200">Microsoft Edge</span> to continue.
+      </p>
+    </div>
+  </div>
+
+  <div id="app" class="mx-auto flex min-h-screen max-w-5xl flex-col px-6">
+
+    <!-- Header -->
+    <header class="flex items-center justify-between border-b border-canvas-200/70 dark:border-canvas-800 py-5">
+      <div class="flex items-center gap-2.5">
+        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-500 text-white shadow-soft">
+          <i data-lucide="library-big" class="h-4.5 w-4.5" style="width:18px;height:18px"></i>
+        </div>
+        <span class="text-[15px] font-semibold tracking-tight text-canvas-900 dark:text-canvas-50">Bindery</span>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <div id="folder-path" class="hidden items-center gap-1.5 rounded-md border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5 font-mono text-xs text-canvas-500 dark:text-canvas-400">
+          <i data-lucide="folder" class="h-3.5 w-3.5 shrink-0"></i>
+          <span id="folder-path-name" class="max-w-[220px] truncate"></span>
+        </div>
+        <button id="choose-folder-btn" type="button"
+          class="inline-flex items-center gap-2 rounded-lg bg-canvas-900 dark:bg-canvas-100 px-3.5 py-2 text-sm font-medium text-canvas-50 dark:text-canvas-900 shadow-soft transition-colors duration-150 hover:bg-canvas-700 dark:hover:bg-white active:scale-[0.98]">
+          <i data-lucide="folder-open" class="h-4 w-4"></i>
+          <span>Choose Folder</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="operation-message" role="alert" aria-live="assertive"
+      class="hidden mt-4 rounded-lg border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger"></div>
+
+    <!-- Empty state (no folder chosen) -->
+    <section id="empty-state" class="flex flex-1 flex-col items-center justify-center py-24 text-center animate-fade-up">
+      <div class="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-500/10 text-accent-500">
+        <i data-lucide="images" class="h-8 w-8"></i>
+      </div>
+      <h1 class="text-xl font-semibold tracking-tight text-canvas-900 dark:text-canvas-50">No folder selected</h1>
+      <p class="mt-2.5 max-w-sm text-sm leading-relaxed text-canvas-500 dark:text-canvas-400">
+        Choose a folder containing your book subfolders. Each subfolder with images inside
+        becomes one book, ready to bind into a PDF.
+      </p>
+      <button id="empty-choose-folder-btn" type="button"
+        class="mt-7 inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2.5 text-sm font-medium text-white shadow-soft transition-colors duration-150 hover:bg-accent-600 active:scale-[0.98]">
+        <i data-lucide="folder-open" class="h-4 w-4"></i>
+        <span>Choose Folder</span>
+      </button>
+      <p class="mt-6 flex items-center gap-1.5 text-xs text-canvas-400 dark:text-canvas-500">
+        <i data-lucide="shield-check" class="h-3.5 w-3.5"></i>
+        Files never leave this device — everything runs locally in your browser.
+      </p>
+    </section>
+
+    <!-- Library view (folder chosen) -->
+    <section id="library-view" class="hidden flex-1 flex-col py-6">
+
+      <!-- Toolbar -->
+      <div class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex items-center gap-4">
+          <div>
+            <p class="text-sm font-medium text-canvas-900 dark:text-canvas-50">
+              <span id="book-count">0</span> books
+            </p>
+            <p class="mt-0.5 text-xs text-canvas-500 dark:text-canvas-400">
+              <span id="pending-count">0</span> pending &middot; <span id="done-count">0</span> done<span id="error-count-wrap" class="hidden text-danger"> &middot; <span id="error-count">0</span> failed</span>
+            </p>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <label for="quality-select" class="sr-only">PDF quality</label>
+          <div class="flex items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
+            <i data-lucide="settings-2" class="h-3.5 w-3.5 text-canvas-400"></i>
+            <select id="quality-select" aria-label="PDF quality"
+              class="bg-transparent text-sm font-medium text-canvas-700 dark:text-canvas-200 outline-none">
+              <option value="original">Original quality</option>
+              <option value="compressed">High-quality compressed</option>
+            </select>
+          </div>
+          <label for="page-format-select" class="sr-only">Page format</label>
+          <div class="flex items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
+            <i data-lucide="file-stack" class="h-3.5 w-3.5 text-canvas-400"></i>
+            <select id="page-format-select" aria-label="Page format"
+              class="bg-transparent text-sm font-medium text-canvas-700 dark:text-canvas-200 outline-none">
+              <option value="letter">US Letter — TPT</option>
+              <option value="a4">A4</option>
+              <option value="original">Original image size</option>
+            </select>
+          </div>
+          <button id="rescan-btn" type="button"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-transparent px-3 py-2 text-sm font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800">
+            <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i>
+            <span>Rescan</span>
+          </button>
+          <button id="redo-all-btn" type="button" disabled
+            class="inline-flex items-center gap-1.5 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-transparent px-3 py-2 text-sm font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800 disabled:cursor-not-allowed disabled:opacity-40">
+            <i data-lucide="rotate-ccw" class="h-3.5 w-3.5"></i>
+            <span>Redo All PDFs</span>
+          </button>
+          <button id="process-all-btn" type="button"
+            class="inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2 text-sm font-medium text-white shadow-soft transition-all duration-150 hover:bg-accent-600 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-accent-500">
+            <i data-lucide="play" class="h-4 w-4"></i>
+            <span>Process All Pending</span>
+          </button>
+        </div>
+      </div>
+
+      <p id="quality-help" class="mb-4 text-xs text-canvas-500 dark:text-canvas-400">
+        US Letter is recommended for TPT printables. Images are fitted without stretching or cropping. Original quality embeds image bytes unchanged.
+      </p>
+
+      <!-- Progress bar (visible while processing) -->
+      <div id="progress-wrap" role="status" aria-live="polite" class="hidden mb-5 rounded-xl border border-canvas-200 dark:border-canvas-800 bg-canvas-100/50 dark:bg-canvas-900 px-4 py-3.5 animate-fade-up">
+        <div class="flex items-center justify-between text-xs">
+          <span class="flex items-center gap-1.5 font-medium text-canvas-700 dark:text-canvas-200">
+            <i data-lucide="loader-circle" class="h-3.5 w-3.5 animate-spin text-accent-500"></i>
+            Processing books&hellip;
+          </span>
+          <span id="progress-counter" class="font-mono text-canvas-500 dark:text-canvas-400">0 / 0</span>
+        </div>
+        <div class="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-canvas-200 dark:bg-canvas-800">
+          <div id="progress-bar" class="h-full rounded-full bg-accent-500 transition-[width] duration-300 ease-out" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Book list -->
+      <div class="overflow-hidden rounded-xl border border-canvas-200 dark:border-canvas-800">
+        <div class="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 border-b border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900/60 px-4 py-2.5 text-xs font-medium uppercase tracking-wide text-canvas-400 dark:text-canvas-500">
+          <span>Book</span>
+          <span class="text-right">Pages</span>
+          <span class="w-24 text-center">Status</span>
+          <span class="w-64 text-right">Actions</span>
+        </div>
+        <div id="book-list" class="divide-y divide-canvas-200 dark:divide-canvas-800"></div>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- templates -->
+  <template id="book-row-template">
+    <div class="book-row grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 px-4 py-3.5 transition-colors duration-150 hover:bg-canvas-50 dark:hover:bg-canvas-900/40 animate-fade-up">
+      <div class="min-w-0">
+        <p class="book-name truncate text-sm font-medium text-canvas-900 dark:text-canvas-50"></p>
+        <p class="book-error mt-1 hidden items-center gap-1.5 text-xs text-danger"></p>
+      </div>
+      <span class="book-pages text-right font-mono text-sm text-canvas-500 dark:text-canvas-400"></span>
+      <span class="status-pill-wrap w-24 flex justify-center"></span>
+      <div class="flex w-64 items-center justify-end gap-1.5">
+        <button type="button" class="rebuild-btn hidden inline-flex items-center gap-1.5 rounded-md border border-canvas-200 dark:border-canvas-800 px-2.5 py-1.5 text-xs font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800">
+          <i data-lucide="rotate-ccw" class="h-3.5 w-3.5"></i>
+          Redo PDF
+        </button>
+        <button type="button" class="tpt-assets-btn inline-flex items-center gap-1.5 rounded-md border border-canvas-200 dark:border-canvas-800 px-2.5 py-1.5 text-xs font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800">
+          <i data-lucide="package-check" class="h-3.5 w-3.5"></i>
+          TPT Assets
+        </button>
+        <button type="button" disabled title="No PDF found"
+          class="check-pdf-btn inline-flex items-center gap-1.5 rounded-md border border-canvas-200 dark:border-canvas-800 px-2.5 py-1.5 text-xs font-medium text-canvas-400 dark:text-canvas-500 cursor-not-allowed opacity-60">
+          <i data-lucide="badge-check" class="h-3.5 w-3.5"></i>
+          Check PDF
+        </button>
+      </div>
+    </div>
+  </template>
+
+  <script src="js/pdf-lib.min.js"></script>
+  <script src="js/lucide.min.js"></script>
+  <script type="module" src="js/app.js?v=20260830-13"></script>
+</body>
+</html>
