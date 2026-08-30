@@ -5,8 +5,10 @@ const IMAGE_EXT = /\.(png|jpe?g)$/i;
 const PDF_EXT = /\.pdf$/i;
 const RESERVED_DIRECTORIES = new Set(['_tpt_assets']);
 
-// Recursively scans every subfolder of `rootHandle`. Each folder containing
-// at least one directly-nested image is one "book". Keeping a book's images
+// Recursively scans `rootHandle` and every subfolder beneath it. Each folder
+// containing at least one directly-nested image is one "book" — including the
+// picked folder itself, so pointing Bindery at a single book's folder works
+// exactly like pointing it at a library of many. Keeping a book's images
 // direct avoids accidentally mixing pages from parent and child folders.
 export async function scanBooks(rootHandle) {
   const books = [];
@@ -57,9 +59,11 @@ export async function scanBooks(rootHandle) {
       const recordedPdfExists = generatedPdfName && pdfNames.some(
         (name) => name.toLowerCase() === generatedPdfName.toLowerCase()
       );
+      // An empty `pathParts` means this is the picked root folder itself, which
+      // has no path relative to the scan; fall back to its own folder name.
       books.push({
-        name: pathParts[pathParts.length - 1],
-        relativePath: pathParts.join(' / '),
+        name: pathParts.length > 0 ? pathParts[pathParts.length - 1] : handle.name,
+        relativePath: pathParts.length > 0 ? pathParts.join(' / ') : handle.name,
         dirHandle: handle,
         imageHandles,
         imageCount: imageHandles.length,
@@ -87,14 +91,10 @@ export async function scanBooks(rootHandle) {
     );
   }
 
-  const topDirectories = [];
-  for await (const [name, handle] of rootHandle.entries()) {
-    if (handle.kind === 'directory') topDirectories.push({ name, handle });
-  }
-  topDirectories.sort((a, b) => naturalCompare(a.name, b.name));
-  await Promise.all(
-    topDirectories.map((child) => scanDirectory(child.handle, [child.name]))
-  );
+  // Starting at the root itself (rather than at its children) means a folder of
+  // loose page images is discovered as one book, and `scanDirectory` still
+  // recurses into every subfolder for the library-of-many-books case.
+  await scanDirectory(rootHandle, []);
 
   books.sort((a, b) => naturalCompare(a.relativePath, b.relativePath));
   return books;

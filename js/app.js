@@ -1,4 +1,4 @@
-import { scanBooks } from './fs-scan.js?v=20260830-11';
+import { scanBooks } from './fs-scan.js?v=20260830-12';
 import { buildBookPdf } from './pdf-builder.js?v=20260830-11';
 import { runPool } from './pool.js?v=20260830-3';
 import { chooseOutputPdfName } from './output-name.js?v=20260830-4';
