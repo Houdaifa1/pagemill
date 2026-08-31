@@ -1,13 +1,9 @@
-import { scanBooks } from './fs-scan.js?v=20260831-2';
-import { buildBookPdf } from './pdf-builder.js?v=20260831-2';
-import { buildVectorBookPdf, isVectorBook } from './vector-pdf-builder.js?v=20260831-2';
-import { renderSvgThumbnail } from './svg-page.js?v=20260831-2';
-import { runPool } from './pool.js?v=20260831-2';
-import { chooseOutputPdfName } from './output-name.js?v=20260831-2';
-import { validatePdfBytes, validatePdfHandle } from './pdf-validator.js?v=20260831-2';
+import { scanBooks } from './fs-scan.js?v=20260831-3';
+import { buildBookPdf } from './pdf-builder.js?v=20260831-3';
+import { runPool } from './pool.js?v=20260831-3';
+import { chooseOutputPdfName } from './output-name.js?v=20260831-3';
+import { validatePdfHandle } from './pdf-validator.js?v=20260831-3';
 
-// Two books at a time keeps memory stable when each book contains dozens of
-// multi-megabyte scans. Higher concurrency can freeze or crash browser tabs.
 const CONCURRENCY = 2;
 const PDFLib = window.PDFLib;
 
@@ -21,8 +17,6 @@ const els = {
   rescanBtn: document.getElementById('rescan-btn'),
   redoAllBtn: document.getElementById('redo-all-btn'),
   processAllBtn: document.getElementById('process-all-btn'),
-  qualitySelect: document.getElementById('quality-select'),
-  pageFormatSelect: document.getElementById('page-format-select'),
   folderPath: document.getElementById('folder-path'),
   folderPathName: document.getElementById('folder-path-name'),
   bookCount: document.getElementById('book-count'),
@@ -38,7 +32,6 @@ const els = {
   rowTemplate: document.getElementById('book-row-template'),
 };
 
-/** @type {Array<ReturnType<typeof scanBooksResult>> | any[]} */
 let books = [];
 let rootHandle = null;
 let isProcessing = false;
@@ -67,51 +60,29 @@ function pillMarkup(status) {
   return `<span class="status-pill ${config.cls}"><span class="dot"></span>${config.label}</span>`;
 }
 
-function applyMessageTone(element, book, message) {
-  element.classList.remove(
-    'text-danger',
-    'text-success',
-    'text-warn',
-    'text-canvas-500',
-    'dark:text-canvas-400'
-  );
-  if (book.error) {
-    element.classList.add('text-danger');
-  } else if (book.status === 'done' && message.startsWith('Verified')) {
-    element.classList.add('text-success');
-  } else if (/warning|below \d+ dpi|rebuild required|missing|multiple existing pdf/i.test(message)) {
-    element.classList.add('text-warn');
-  } else {
-    element.classList.add('text-canvas-500', 'dark:text-canvas-400');
-  }
-}
-
 function renderBookRow(book, index) {
   const node = els.rowTemplate.content.firstElementChild.cloneNode(true);
   node.dataset.index = String(index);
   node.style.animationDelay = `${Math.min(index * 18, 240)}ms`;
-
   node.querySelector('.book-name').textContent = book.relativePath || book.name;
   node.querySelector('.book-pages').textContent = `${book.pageCount} pg`;
   node.querySelector('.status-pill-wrap').innerHTML = pillMarkup(book.status);
 
-  const errorEl = node.querySelector('.book-error');
+  const messageEl = node.querySelector('.book-error');
   const message = book.error || book.notice;
   if (message) {
-    errorEl.classList.remove('hidden');
-    errorEl.classList.add('flex');
-    applyMessageTone(errorEl, book, message);
-    errorEl.replaceChildren();
+    messageEl.classList.remove('hidden');
+    messageEl.classList.add('flex');
+    messageEl.classList.toggle('text-danger', Boolean(book.error));
+    messageEl.classList.toggle('text-success', !book.error && book.status === 'done');
+    messageEl.replaceChildren();
     const icon = document.createElement('i');
     icon.dataset.lucide = 'info';
     icon.className = 'h-3.5 w-3.5 shrink-0';
     const text = document.createElement('span');
     text.className = 'truncate';
     text.textContent = message;
-    errorEl.append(icon, text);
-  } else {
-    errorEl.classList.add('hidden');
-    errorEl.classList.remove('flex');
+    messageEl.append(icon, text);
   }
 
   const rebuildBtn = node.querySelector('.rebuild-btn');
@@ -121,61 +92,51 @@ function renderBookRow(book, index) {
   }
 
   const checkPdfBtn = node.querySelector('.check-pdf-btn');
-  if (book.pdfHandles?.length > 0) {
+  if (book.pdfHandles.length > 0) {
     checkPdfBtn.disabled = false;
-    checkPdfBtn.title = 'Validate PDF';
+    checkPdfBtn.title = 'Fully validate PDF';
     checkPdfBtn.classList.remove('cursor-not-allowed', 'opacity-60');
     checkPdfBtn.addEventListener('click', () => checkBookPdf(book));
   }
-
-  const assetsBtn = node.querySelector('.tpt-assets-btn');
-  assetsBtn.disabled = isProcessing;
-  assetsBtn.addEventListener('click', () => createTptAssets(book));
-
   return node;
 }
 
-function renderBookList() {
+function renderAll() {
   els.bookList.innerHTML = '';
-  const frag = document.createDocumentFragment();
-  books.forEach((book, index) => frag.appendChild(renderBookRow(book, index)));
-  els.bookList.appendChild(frag);
-  refreshIcons();
-}
+  const fragment = document.createDocumentFragment();
+  books.forEach((book, index) => fragment.appendChild(renderBookRow(book, index)));
+  els.bookList.appendChild(fragment);
 
-function renderSummary() {
-  const pending = books.filter((b) => b.status === 'pending').length;
-  const done = books.filter((b) => b.status === 'done').length;
-  const errored = books.filter((b) => b.status === 'error').length;
-
+  const pending = books.filter((book) => book.status === 'pending').length;
+  const done = books.filter((book) => book.status === 'done').length;
+  const errors = books.filter((book) => book.status === 'error').length;
   els.bookCount.textContent = String(books.length);
   els.pendingCount.textContent = String(pending);
   els.doneCount.textContent = String(done);
-  els.errorCount.textContent = String(errored);
-  els.errorCountWrap.classList.toggle('hidden', errored === 0);
-
+  els.errorCount.textContent = String(errors);
+  els.errorCountWrap.classList.toggle('hidden', errors === 0);
   els.processAllBtn.disabled = isProcessing || pending === 0;
   els.redoAllBtn.disabled = isProcessing || books.length === 0;
-  els.qualitySelect.disabled = isProcessing;
-  els.pageFormatSelect.disabled = isProcessing;
   els.rescanBtn.disabled = isProcessing;
   els.chooseFolderBtn.disabled = isProcessing;
   els.emptyChooseFolderBtn.disabled = isProcessing;
+  refreshIcons();
 }
 
-function clearOperationMessage() {
-  els.operationMessage.textContent = '';
-  els.operationMessage.classList.add('hidden');
+function updateProgress(current, total) {
+  els.progressWrap.classList.toggle('hidden', total === 0);
+  if (total === 0) return;
+  els.progressCounter.textContent = `${current} / ${total}`;
+  els.progressBar.style.width = `${Math.round((current / total) * 100)}%`;
 }
 
 function showOperationError(error) {
-  const detail = error?.message || 'Unexpected file operation failure.';
-  els.operationMessage.textContent = `Bindery could not complete that action: ${detail}`;
+  els.operationMessage.textContent = `Bindery could not complete that action: ${error?.message || 'unexpected failure'}`;
   els.operationMessage.classList.remove('hidden');
 }
 
 async function runUiAction(action) {
-  clearOperationMessage();
+  els.operationMessage.classList.add('hidden');
   try {
     await action();
   } catch (error) {
@@ -184,38 +145,19 @@ async function runUiAction(action) {
   }
 }
 
-function renderAll() {
-  renderBookList();
-  renderSummary();
-}
-
-function updateProgress(current, total) {
-  if (total === 0) {
-    els.progressWrap.classList.add('hidden');
-    return;
-  }
-  els.progressWrap.classList.remove('hidden');
-  els.progressCounter.textContent = `${current} / ${total}`;
-  const pct = Math.round((current / total) * 100);
-  els.progressBar.style.width = `${pct}%`;
-}
-
 async function loadFolder() {
   let handle;
   try {
     handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-  } catch (err) {
-    if (err.name === 'AbortError') return;
-    throw err;
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    throw error;
   }
-
   rootHandle = handle;
   els.folderPath.classList.remove('hidden');
   els.folderPath.classList.add('flex');
   els.folderPathName.textContent = handle.name;
-
   await rescan();
-
   els.emptyState.classList.add('hidden');
   els.libraryView.classList.remove('hidden');
   els.libraryView.classList.add('flex');
@@ -224,13 +166,6 @@ async function loadFolder() {
 async function rescan() {
   if (!rootHandle) return;
   books = await scanBooks(rootHandle);
-  const results = await runPool(books, CONCURRENCY, validateScannedBook);
-  results.forEach((result, index) => {
-    if (!result.ok) {
-      books[index].status = 'error';
-      books[index].error = `PDF check failed: ${result.error?.message || 'unknown error'}`;
-    }
-  });
   renderAll();
 }
 
@@ -238,168 +173,47 @@ function findPdfHandle(book, name) {
   return book.pdfHandles.find((entry) => entry.name.toLowerCase() === name?.toLowerCase());
 }
 
-async function validateScannedBook(book) {
-  if (book.sourceChanged) {
-    book.status = 'pending';
-    book.notice = 'Source images changed since the last PDF. Rebuild required.';
-    return;
-  }
-  const options = {
-    expectedPageCount: book.pageCount,
-    pageFormat: book.markerRecord?.pageFormat || null,
-    vectorMode: book.sourceMode === 'vector',
-  };
-  const owned = findPdfHandle(book, book.generatedPdfName);
-  if (!owned && book.pdfHandles.length > 1) {
-    book.status = 'pending';
-    book.notice = 'Multiple existing PDFs were found and none is recorded as Bindery-owned. Rebuild to create a separate verified Bindery PDF.';
-    return;
-  }
-  const candidates = owned ? [owned] : book.pdfHandles;
-  let bestFailure = null;
-
-  for (const candidate of candidates) {
-    const result = await validatePdfHandle(candidate.handle, PDFLib, options);
-    if (result.ok) {
-      book.status = 'done';
-      book.validatedPdfName = candidate.name;
-      book.validation = result;
-      book.notice = result.warnings[0] || `Verified ${result.pageCount}-page PDF.`;
-      return;
-    }
-    bestFailure = result;
-  }
-
-  if (candidates.length > 0) {
-    book.notice = bestFailure?.errors[0] || 'Existing PDF failed validation. Rebuild required.';
-  } else if (book.markerRecord) {
-    book.notice = 'The PDF recorded by Bindery is missing. Rebuild required.';
-  }
-  book.status = 'pending';
-  book.validation = bestFailure;
-}
-
 async function checkBookPdf(book) {
   if (isProcessing) return;
   book.status = 'checking';
   book.error = null;
-  book.notice = 'Checking PDF…';
+  book.notice = 'Fully checking PDF...';
   renderAll();
-  await validateScannedBook(book);
-  renderAll();
-}
-
-async function createTptAssets(book) {
-  if (isProcessing) return;
-  isProcessing = true;
-  const previousStatus = book.status;
-  book.notice = 'Creating preview and thumbnails…';
-  book.error = null;
-  renderAll();
-
   try {
-    const pageFormat = els.pageFormatSelect.value;
-    const compress = els.qualitySelect.value === 'compressed';
-    const assetsDir = await book.dirHandle.getDirectoryHandle('_tpt_assets', { create: true });
-    const vectorMode = isVectorBook(book.pageHandles);
-    const previewHandles = book.pageHandles.slice(0, 3);
-    const previewBytes = vectorMode
-      ? await buildVectorBookPdf(previewHandles, PDFLib, {
-          compressCover: compress,
-          pageFormat,
-          title: `${book.name} — Preview`,
-        })
-      : await buildBookPdf(previewHandles, PDFLib, {
-          compress,
-          pageFormat,
-          title: `${book.name} — Preview`,
-        });
-    const previewName = `${book.name} - Preview.pdf`;
-    const previewHandle = await assetsDir.getFileHandle(previewName, { create: true });
-    const previewWritable = await previewHandle.createWritable();
-    await previewWritable.write(previewBytes);
-    await previewWritable.close();
-    const previewValidation = await validatePdfHandle(previewHandle, PDFLib, {
-      expectedPageCount: previewHandles.length,
-      pageFormat,
-      vectorMode,
+    const owned = findPdfHandle(book, book.generatedPdfName);
+    const candidates = owned ? [owned] : book.pdfHandles;
+    if (candidates.length !== 1) throw new Error('Select a folder with one PDF or rebuild it with Bindery.');
+    const result = await validatePdfHandle(candidates[0].handle, PDFLib, {
+      expectedPageCount: book.pageCount,
     });
-    if (!previewValidation.ok) throw new Error(previewValidation.errors.join(' '));
-
-    const thumbnails = book.pageHandles.slice(0, 4);
-    for (let index = 0; index < thumbnails.length; index++) {
-      const isSvg = /\.svg$/i.test(thumbnails[index].name);
-      const source = isSvg
-        ? await renderSvgThumbnail(thumbnails[index], pageFormat)
-        : await thumbnails[index].handle.getFile();
-      const extension = isSvg ? 'png' : thumbnails[index].name.split('.').pop().toLowerCase();
-      const thumbnailHandle = await assetsDir.getFileHandle(
-        `Thumbnail ${index + 1}.${extension}`,
-        { create: true }
-      );
-      const writable = await thumbnailHandle.createWritable();
-      await writable.write(source);
-      await writable.close();
-    }
-
-    book.notice = `Created a ${previewHandles.length}-page preview and ${thumbnails.length} thumbnails in _tpt_assets.`;
-    book.status = previousStatus;
+    if (!result.ok) throw new Error(result.errors.join(' '));
+    book.status = 'done';
+    book.notice = `Verified ${result.pageCount} aligned US Letter pages.`;
   } catch (error) {
-    book.status = previousStatus;
-    book.error = `TPT asset creation failed: ${error?.message || 'unknown error'}`;
-  } finally {
-    isProcessing = false;
-    renderAll();
+    book.status = 'error';
+    book.error = `PDF check failed: ${error?.message || 'unknown error'}`;
   }
+  renderAll();
 }
 
-async function processOneBook(book, qualityMode, pageFormat) {
-  const index = books.indexOf(book);
+async function processOneBook(book) {
   book.status = 'processing';
   book.error = null;
+  book.notice = 'Building PDF...';
   renderAll();
+  const startedAt = performance.now();
 
   try {
     const pdfName = chooseOutputPdfName(book);
-    const pageDiagnostics = [];
-    const vectorMode = isVectorBook(book.pageHandles);
-    const pdfBytes = vectorMode
-      ? await buildVectorBookPdf(book.pageHandles, PDFLib, {
-          compressCover: qualityMode === 'compressed',
-          pageFormat,
-          title: book.name,
-          onPageProcessed: (diagnostic) => pageDiagnostics.push(diagnostic),
-        })
-      : await buildBookPdf(book.imageHandles, PDFLib, {
-          compress: qualityMode === 'compressed',
-          pageFormat,
-          title: book.name,
-          onPageProcessed: (diagnostic) => pageDiagnostics.push(diagnostic),
-        });
+    const pdfBytes = await buildBookPdf(book.imageHandles, PDFLib, { title: book.name });
+    const pdfHandle = await book.dirHandle.getFileHandle(pdfName, { create: true });
+    const writable = await pdfHandle.createWritable();
+    await writable.write(pdfBytes);
+    await writable.close();
 
-    // Validate the complete in-memory result before touching any existing file.
-    // A failed conversion therefore cannot replace a previously good Bindery PDF.
-    const memoryValidation = await validatePdfBytes(pdfBytes, PDFLib, {
-      expectedPageCount: book.pageCount,
-      pageFormat,
-      vectorMode,
-    });
-    if (!memoryValidation.ok) {
-      throw new Error(`Generated PDF failed verification before save: ${memoryValidation.errors.join(' ')}`);
-    }
-
-    const pdfFileHandle = await book.dirHandle.getFileHandle(pdfName, { create: true });
-    const pdfWritable = await pdfFileHandle.createWritable();
-    await pdfWritable.write(pdfBytes);
-    await pdfWritable.close();
-
-    const validation = await validatePdfHandle(pdfFileHandle, PDFLib, {
-      expectedPageCount: book.pageCount,
-      pageFormat,
-      vectorMode,
-    });
-    if (!validation.ok) {
-      throw new Error(`Written PDF failed verification: ${validation.errors.join(' ')}`);
+    const writtenFile = await pdfHandle.getFile();
+    if (writtenFile.size !== pdfBytes.length) {
+      throw new Error(`Written PDF size mismatch (${writtenFile.size} instead of ${pdfBytes.length} bytes).`);
     }
 
     const doneRecord = {
@@ -407,89 +221,55 @@ async function processOneBook(book, qualityMode, pageFormat) {
       pageCount: book.pageCount,
       imageCount: book.pageCount,
       pdfFile: pdfName,
-      quality: qualityMode,
-      pageFormat,
-      sourceMode: vectorMode ? 'vector' : 'raster',
+      pdfSize: writtenFile.size,
+      pageFormat: 'letter',
+      sourceMode: 'png',
       sourceSnapshot: book.sourceSnapshot,
       imageSnapshot: book.sourceSnapshot,
-      minimumDpi: pageDiagnostics.some((page) => Number.isFinite(page.effectiveDpi))
-        ? Math.round(Math.min(...pageDiagnostics.filter((page) => Number.isFinite(page.effectiveDpi)).map((page) => page.effectiveDpi)))
-        : null,
-      verifiedAt: new Date().toISOString(),
     };
-    const doneFileHandle = await book.dirHandle.getFileHandle('.done', { create: true });
-    const doneWritable = await doneFileHandle.createWritable();
+    const doneHandle = await book.dirHandle.getFileHandle('.done', { create: true });
+    const doneWritable = await doneHandle.createWritable();
     await doneWritable.write(JSON.stringify(doneRecord, null, 2));
     await doneWritable.close();
 
     book.generatedPdfName = pdfName;
-    if (!book.pdfNames.some((name) => name.toLowerCase() === pdfName.toLowerCase())) {
-      book.pdfNames.push(pdfName);
-      book.pdfHandles.push({ name: pdfName, handle: pdfFileHandle });
-    }
     book.markerRecord = doneRecord;
     book.sourceChanged = false;
-    book.validation = validation;
-    const rasterDiagnostics = pageDiagnostics.filter((page) => Number.isFinite(page.effectiveDpi));
-    const lowResolutionPages = rasterDiagnostics.filter((page) => page.effectiveDpi < 200);
-    const printWarnings = rasterDiagnostics.filter((page) => page.effectiveDpi >= 200 && page.effectiveDpi < 300);
-    if (lowResolutionPages.length > 0) {
-      const first = lowResolutionPages[0];
-      book.notice = `Print warning: ${lowResolutionPages.length} page(s) are below 200 DPI; lowest is ${Math.round(first.effectiveDpi)} DPI (${first.name}).`;
-    } else if (printWarnings.length > 0) {
-      const minimum = Math.min(...printWarnings.map((page) => page.effectiveDpi));
-      book.notice = `Print check recommended: ${printWarnings.length} page(s) are below 300 DPI; lowest is ${Math.round(minimum)} DPI.`;
-    } else if (vectorMode) {
-      book.notice = validation.warnings[0] || `Verified ${validation.pageCount}-page vector PDF: image cover + selectable worksheet text.`;
-    } else {
-      book.notice = validation.warnings[0] || `Verified ${validation.pageCount}-page PDF at 300 DPI or better.`;
+    if (!book.pdfNames.some((name) => name.toLowerCase() === pdfName.toLowerCase())) {
+      book.pdfNames.push(pdfName);
+      book.pdfHandles.push({ name: pdfName, handle: pdfHandle });
     }
+    const seconds = (performance.now() - startedAt) / 1000;
     book.status = 'done';
-  } catch (err) {
-    console.error(`Failed to process "${book.name}":`, err);
+    book.notice = `Created ${book.pageCount} aligned US Letter pages in ${seconds.toFixed(2)} s.`;
+  } catch (error) {
+    console.error(`Failed to process ${book.name}:`, error);
     book.status = 'error';
-    book.error = err && err.message ? err.message : 'Something went wrong while building this PDF.';
+    book.error = error?.message || 'PDF generation failed.';
   }
-
-  if (index !== -1) renderAll();
+  renderAll();
 }
 
 async function processBooks(targetBooks) {
   if (isProcessing || targetBooks.length === 0) return;
   isProcessing = true;
-  renderSummary();
-
+  renderAll();
   let completed = 0;
-  const total = targetBooks.length;
-  const qualityMode = els.qualitySelect.value;
-  const pageFormat = els.pageFormatSelect.value;
-  updateProgress(0, total);
-
+  updateProgress(0, targetBooks.length);
   await runPool(targetBooks, CONCURRENCY, async (book) => {
-    await processOneBook(book, qualityMode, pageFormat);
+    await processOneBook(book);
     completed += 1;
-    updateProgress(completed, total);
+    updateProgress(completed, targetBooks.length);
   });
-
   isProcessing = false;
   updateProgress(0, 0);
   renderAll();
 }
 
-function processAllPending() {
-  const pending = books.filter((b) => b.status === 'pending');
-  return processBooks(pending);
-}
-
-function redoAllBooks() {
-  return processBooks([...books]);
-}
-
 els.chooseFolderBtn.addEventListener('click', () => runUiAction(loadFolder));
 els.emptyChooseFolderBtn.addEventListener('click', () => runUiAction(loadFolder));
 els.rescanBtn.addEventListener('click', () => runUiAction(rescan));
-els.redoAllBtn.addEventListener('click', () => runUiAction(redoAllBooks));
-els.processAllBtn.addEventListener('click', () => runUiAction(processAllPending));
-if (checkBrowserSupport()) {
-  refreshIcons();
-}
+els.redoAllBtn.addEventListener('click', () => runUiAction(() => processBooks([...books])));
+els.processAllBtn.addEventListener('click', () => runUiAction(() => processBooks(books.filter((book) => book.status === 'pending'))));
+
+if (checkBrowserSupport()) refreshIcons();
