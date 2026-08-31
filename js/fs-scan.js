@@ -1,114 +1,78 @@
-import { naturalCompare } from './natural-sort.js?v=20260831-3';
-import { createImageSnapshot, imageSnapshotsMatch } from './source-state.js?v=20260831-3';
+import { naturalCompare } from './natural-sort.js?v=20260830-3';
 
-const PNG_EXT = /\.png$/i;
+const IMAGE_EXT = /\.(png|jpe?g)$/i;
 const PDF_EXT = /\.pdf$/i;
-const RESERVED_DIRECTORIES = new Set(['_tpt_assets']);
 
-// Every directory containing directly nested PNG files is one book. Child
-// folders are scanned independently so pages from different books never mix.
+// Recursively scans every subfolder of `rootHandle`. Each folder containing
+// at least one directly-nested image is one "book". Keeping a book's images
+// direct avoids accidentally mixing pages from parent and child folders.
 export async function scanBooks(rootHandle) {
   const books = [];
 
   async function scanDirectory(handle, pathParts) {
     const imageHandles = [];
     const childDirectories = [];
-    const pdfHandles = [];
+    const pdfNames = [];
     let doneMarker = null;
 
     for await (const [childName, childHandle] of handle.entries()) {
       if (childHandle.kind === 'directory') {
-        if (!RESERVED_DIRECTORIES.has(childName.toLowerCase())) {
-          childDirectories.push({ name: childName, handle: childHandle });
-        }
-      } else if (PNG_EXT.test(childName)) {
+        childDirectories.push({ name: childName, handle: childHandle });
+      } else if (IMAGE_EXT.test(childName)) {
         imageHandles.push({ name: childName, handle: childHandle });
       } else if (PDF_EXT.test(childName)) {
-        pdfHandles.push({ name: childName, handle: childHandle });
+        pdfNames.push(childName);
       } else if (childName === '.done') {
         doneMarker = childHandle;
       }
     }
 
     if (imageHandles.length > 0) {
-      imageHandles.sort((left, right) => naturalCompare(left.name, right.name));
-      pdfHandles.sort((left, right) => naturalCompare(left.name, right.name));
-      const sourceSnapshot = await createImageSnapshot(imageHandles);
-
-      let markerRecord = null;
+      imageHandles.sort((a, b) => naturalCompare(a.name, b.name));
+      pdfNames.sort(naturalCompare);
+      let generatedPdfName = null;
       if (doneMarker) {
         try {
-          markerRecord = JSON.parse(await (await doneMarker.getFile()).text());
+          const markerFile = await doneMarker.getFile();
+          const marker = JSON.parse(await markerFile.text());
+          if (typeof marker.pdfFile === 'string' && marker.pdfFile.trim()) {
+            generatedPdfName = marker.pdfFile;
+          }
         } catch {
-          markerRecord = null;
+          // A malformed marker still means "done", but it cannot prove which
+          // PDF belongs to Bindery, so existing PDFs remain protected.
         }
       }
-
-      const generatedPdfName = typeof markerRecord?.pdfFile === 'string'
-        ? markerRecord.pdfFile
-        : null;
-      const ownedPdf = pdfHandles.find(
-        (entry) => entry.name.toLowerCase() === generatedPdfName?.toLowerCase()
-      );
-      const previousSnapshot = markerRecord?.sourceSnapshot || markerRecord?.imageSnapshot;
-      const sourceChanged = Boolean(markerRecord) &&
-        !imageSnapshotsMatch(previousSnapshot, sourceSnapshot);
-
-      let ownedPdfMatches = false;
-      if (ownedPdf && !sourceChanged) {
-        const file = await ownedPdf.handle.getFile();
-        ownedPdfMatches = !Number.isFinite(markerRecord?.pdfSize) || markerRecord.pdfSize === file.size;
-      }
-
-      let status = 'pending';
-      let notice = null;
-      if (sourceChanged) {
-        notice = 'PNG pages changed since the last PDF. Rebuild required.';
-      } else if (markerRecord && ownedPdfMatches) {
-        status = 'done';
-        notice = `Ready: ${imageHandles.length} PNG pages already processed.`;
-      } else if (markerRecord && !ownedPdf) {
-        notice = 'The PDF recorded by Bindery is missing. Rebuild required.';
-      } else if (markerRecord && !ownedPdfMatches) {
-        notice = 'The existing Bindery PDF changed. Rebuild required.';
-      } else if (pdfHandles.length === 1) {
-        status = 'done';
-        notice = 'Existing PDF found. Use Check PDF if you want full validation.';
-      } else if (pdfHandles.length > 1) {
-        notice = 'Multiple existing PDFs found. Process to create a separate Bindery PDF.';
-      }
-
       books.push({
-        name: pathParts.length ? pathParts[pathParts.length - 1] : handle.name,
-        relativePath: pathParts.length ? pathParts.join(' / ') : handle.name,
+        name: pathParts[pathParts.length - 1],
+        relativePath: pathParts.join(' / '),
         dirHandle: handle,
-        pageHandles: imageHandles,
         imageHandles,
-        pageCount: imageHandles.length,
         imageCount: imageHandles.length,
-        sourceSnapshot,
-        imageSnapshot: sourceSnapshot,
-        pdfNames: pdfHandles.map((entry) => entry.name),
-        pdfHandles,
+        pdfNames,
         generatedPdfName,
-        markerRecord,
-        sourceChanged,
-        status,
-        notice,
+        status: doneMarker || pdfNames.length > 0 ? 'done' : 'pending',
         error: null,
       });
     }
 
-    childDirectories.sort((left, right) => naturalCompare(left.name, right.name));
-    for (let start = 0; start < childDirectories.length; start += 4) {
-      const batch = childDirectories.slice(start, start + 4);
-      await Promise.all(batch.map((child) =>
+    childDirectories.sort((a, b) => naturalCompare(a.name, b.name));
+    await Promise.all(
+      childDirectories.map((child) =>
         scanDirectory(child.handle, [...pathParts, child.name])
-      ));
-    }
+      )
+    );
   }
 
-  await scanDirectory(rootHandle, []);
-  books.sort((left, right) => naturalCompare(left.relativePath, right.relativePath));
+  const topDirectories = [];
+  for await (const [name, handle] of rootHandle.entries()) {
+    if (handle.kind === 'directory') topDirectories.push({ name, handle });
+  }
+  topDirectories.sort((a, b) => naturalCompare(a.name, b.name));
+  await Promise.all(
+    topDirectories.map((child) => scanDirectory(child.handle, [child.name]))
+  );
+
+  books.sort((a, b) => naturalCompare(a.relativePath, b.relativePath));
   return books;
 }

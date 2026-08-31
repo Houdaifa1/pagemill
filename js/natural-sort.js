@@ -1,5 +1,5 @@
 // True natural-order comparator: splits into runs of digits vs non-digits
-// so "page2.png" sorts before "page10.png" instead of after.
+// so "page2.jpg" sorts before "page10.jpg" instead of after.
 export function naturalCompare(a, b) {
   const ax = String(a).match(/(\d+|\D+)/g) || [];
   const bx = String(b).match(/(\d+|\D+)/g) || [];

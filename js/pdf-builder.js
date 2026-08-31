@@ -1,76 +1,38 @@
+import { readImageForPdf } from './image-io.js?v=20260830-3';
+
+// Source pixel dimensions are treated as 300 DPI when converting to PDF
+// points (72 points per inch) — see README for why this assumption was made
+// and what it means for images with different embedded DPI.
+const ASSUMED_DPI = 300;
 const POINTS_PER_INCH = 72;
 
-export const PAGE_FORMATS = {
-  letter: { width: 8.5 * POINTS_PER_INCH, height: 11 * POINTS_PER_INCH },
-};
-
-function isPng(bytes) {
-  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  return bytes.length >= signature.length && signature.every((value, index) => bytes[index] === value);
+function pixelsToPoints(px) {
+  return (px / ASSUMED_DPI) * POINTS_PER_INCH;
 }
 
-export function fitImageToPage(image, pageSize = PAGE_FORMATS.letter) {
-  const scale = Math.min(pageSize.width / image.width, pageSize.height / image.height);
-  const width = image.width * scale;
-  const height = image.height * scale;
-  return {
-    x: (pageSize.width - width) / 2,
-    y: (pageSize.height - height) / 2,
-    width,
-    height,
-  };
-}
-
-// Fast PNG-only path: source bytes are embedded directly. pdf-lib supplies the
-// pixel dimensions, so the browser never decodes or re-encodes the image.
-export async function buildBookPdf(
-  pngHandles,
-  PDFLib,
-  { title = 'Bindery PDF', onPageProcessed = null } = {}
-) {
-  if (pngHandles.length === 0) throw new Error('This folder contains no PNG pages.');
-
-  const pageSize = PAGE_FORMATS.letter;
+// Builds one PDF from a book's already-naturally-sorted image handles.
+// Pages are read, decoded, and embedded one at a time. A book containing many
+// large scans would otherwise keep every decoded bitmap in memory at once and
+// can freeze the browser.
+export async function buildBookPdf(imageHandles, PDFLib, { compress = false } = {}) {
   const pdfDoc = await PDFLib.PDFDocument.create();
-  pdfDoc.setTitle(title);
-  pdfDoc.setSubject('US Letter book assembled from naturally ordered PNG pages');
-  pdfDoc.setCreator('Bindery');
-  pdfDoc.setProducer('Bindery fast PNG engine');
 
-  for (let index = 0; index < pngHandles.length; index++) {
-    const { handle, name } = pngHandles[index];
+  for (const { handle } of imageHandles) {
     const file = await handle.getFile();
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    if (!isPng(bytes)) throw new Error(`${name}: file extension is PNG but the file data is not a valid PNG.`);
+    const image = await readImageForPdf(file, { compress });
+    const embedded =
+      image.type === 'png'
+        ? await pdfDoc.embedPng(image.bytes)
+        : await pdfDoc.embedJpg(image.bytes);
 
-    let embedded;
-    try {
-      embedded = await pdfDoc.embedPng(bytes);
-    } catch (error) {
-      throw new Error(`${name}: PNG cannot be embedded (${error?.message || 'invalid PNG'}).`);
-    }
-
-    const placement = fitImageToPage(embedded, pageSize);
-    const page = pdfDoc.addPage([pageSize.width, pageSize.height]);
-    page.drawRectangle({
+    const pageWidth = pixelsToPoints(image.width);
+    const pageHeight = pixelsToPoints(image.height);
+    const page = pdfDoc.addPage([pageWidth, pageHeight]);
+    page.drawImage(embedded, {
       x: 0,
       y: 0,
-      width: pageSize.width,
-      height: pageSize.height,
-      color: PDFLib.rgb(1, 1, 1),
-    });
-    page.drawImage(embedded, placement);
-
-    onPageProcessed?.({
-      index,
-      name,
-      width: embedded.width,
-      height: embedded.height,
-      placement,
-      effectiveDpi: Math.min(
-        embedded.width / (placement.width / POINTS_PER_INCH),
-        embedded.height / (placement.height / POINTS_PER_INCH)
-      ),
+      width: pageWidth,
+      height: pageHeight,
     });
   }
 
