@@ -1,8 +1,10 @@
-import { scanBooks } from './fs-scan.js?v=20260830-12';
-import { buildBookPdf } from './pdf-builder.js?v=20260830-11';
-import { runPool } from './pool.js?v=20260830-3';
-import { chooseOutputPdfName } from './output-name.js?v=20260830-4';
-import { validatePdfHandle } from './pdf-validator.js?v=20260830-11';
+import { scanBooks } from './fs-scan.js?v=20260831-2';
+import { buildBookPdf } from './pdf-builder.js?v=20260831-2';
+import { buildVectorBookPdf, isVectorBook } from './vector-pdf-builder.js?v=20260831-2';
+import { renderSvgThumbnail } from './svg-page.js?v=20260831-2';
+import { runPool } from './pool.js?v=20260831-2';
+import { chooseOutputPdfName } from './output-name.js?v=20260831-2';
+import { validatePdfBytes, validatePdfHandle } from './pdf-validator.js?v=20260831-2';
 
 // Two books at a time keeps memory stable when each book contains dozens of
 // multi-megabyte scans. Higher concurrency can freeze or crash browser tabs.
@@ -90,7 +92,7 @@ function renderBookRow(book, index) {
   node.style.animationDelay = `${Math.min(index * 18, 240)}ms`;
 
   node.querySelector('.book-name').textContent = book.relativePath || book.name;
-  node.querySelector('.book-pages').textContent = `${book.imageCount} pg`;
+  node.querySelector('.book-pages').textContent = `${book.pageCount} pg`;
   node.querySelector('.status-pill-wrap').innerHTML = pillMarkup(book.status);
 
   const errorEl = node.querySelector('.book-error');
@@ -243,8 +245,9 @@ async function validateScannedBook(book) {
     return;
   }
   const options = {
-    expectedPageCount: book.imageCount,
+    expectedPageCount: book.pageCount,
     pageFormat: book.markerRecord?.pageFormat || null,
+    vectorMode: book.sourceMode === 'vector',
   };
   const owned = findPdfHandle(book, book.generatedPdfName);
   if (!owned && book.pdfHandles.length > 1) {
@@ -298,12 +301,19 @@ async function createTptAssets(book) {
     const pageFormat = els.pageFormatSelect.value;
     const compress = els.qualitySelect.value === 'compressed';
     const assetsDir = await book.dirHandle.getDirectoryHandle('_tpt_assets', { create: true });
-    const previewHandles = book.imageHandles.slice(0, 3);
-    const previewBytes = await buildBookPdf(previewHandles, PDFLib, {
-      compress,
-      pageFormat,
-      title: `${book.name} — Preview`,
-    });
+    const vectorMode = isVectorBook(book.pageHandles);
+    const previewHandles = book.pageHandles.slice(0, 3);
+    const previewBytes = vectorMode
+      ? await buildVectorBookPdf(previewHandles, PDFLib, {
+          compressCover: compress,
+          pageFormat,
+          title: `${book.name} — Preview`,
+        })
+      : await buildBookPdf(previewHandles, PDFLib, {
+          compress,
+          pageFormat,
+          title: `${book.name} — Preview`,
+        });
     const previewName = `${book.name} - Preview.pdf`;
     const previewHandle = await assetsDir.getFileHandle(previewName, { create: true });
     const previewWritable = await previewHandle.createWritable();
@@ -312,13 +322,17 @@ async function createTptAssets(book) {
     const previewValidation = await validatePdfHandle(previewHandle, PDFLib, {
       expectedPageCount: previewHandles.length,
       pageFormat,
+      vectorMode,
     });
     if (!previewValidation.ok) throw new Error(previewValidation.errors.join(' '));
 
-    const thumbnails = book.imageHandles.slice(0, 4);
+    const thumbnails = book.pageHandles.slice(0, 4);
     for (let index = 0; index < thumbnails.length; index++) {
-      const source = await thumbnails[index].handle.getFile();
-      const extension = thumbnails[index].name.split('.').pop().toLowerCase();
+      const isSvg = /\.svg$/i.test(thumbnails[index].name);
+      const source = isSvg
+        ? await renderSvgThumbnail(thumbnails[index], pageFormat)
+        : await thumbnails[index].handle.getFile();
+      const extension = isSvg ? 'png' : thumbnails[index].name.split('.').pop().toLowerCase();
       const thumbnailHandle = await assetsDir.getFileHandle(
         `Thumbnail ${index + 1}.${extension}`,
         { create: true }
@@ -348,12 +362,31 @@ async function processOneBook(book, qualityMode, pageFormat) {
   try {
     const pdfName = chooseOutputPdfName(book);
     const pageDiagnostics = [];
-    const pdfBytes = await buildBookPdf(book.imageHandles, PDFLib, {
-      compress: qualityMode === 'compressed',
+    const vectorMode = isVectorBook(book.pageHandles);
+    const pdfBytes = vectorMode
+      ? await buildVectorBookPdf(book.pageHandles, PDFLib, {
+          compressCover: qualityMode === 'compressed',
+          pageFormat,
+          title: book.name,
+          onPageProcessed: (diagnostic) => pageDiagnostics.push(diagnostic),
+        })
+      : await buildBookPdf(book.imageHandles, PDFLib, {
+          compress: qualityMode === 'compressed',
+          pageFormat,
+          title: book.name,
+          onPageProcessed: (diagnostic) => pageDiagnostics.push(diagnostic),
+        });
+
+    // Validate the complete in-memory result before touching any existing file.
+    // A failed conversion therefore cannot replace a previously good Bindery PDF.
+    const memoryValidation = await validatePdfBytes(pdfBytes, PDFLib, {
+      expectedPageCount: book.pageCount,
       pageFormat,
-      title: book.name,
-      onPageProcessed: (diagnostic) => pageDiagnostics.push(diagnostic),
+      vectorMode,
     });
+    if (!memoryValidation.ok) {
+      throw new Error(`Generated PDF failed verification before save: ${memoryValidation.errors.join(' ')}`);
+    }
 
     const pdfFileHandle = await book.dirHandle.getFileHandle(pdfName, { create: true });
     const pdfWritable = await pdfFileHandle.createWritable();
@@ -361,8 +394,9 @@ async function processOneBook(book, qualityMode, pageFormat) {
     await pdfWritable.close();
 
     const validation = await validatePdfHandle(pdfFileHandle, PDFLib, {
-      expectedPageCount: book.imageCount,
+      expectedPageCount: book.pageCount,
       pageFormat,
+      vectorMode,
     });
     if (!validation.ok) {
       throw new Error(`Written PDF failed verification: ${validation.errors.join(' ')}`);
@@ -370,13 +404,16 @@ async function processOneBook(book, qualityMode, pageFormat) {
 
     const doneRecord = {
       processedAt: new Date().toISOString(),
-      imageCount: book.imageCount,
+      pageCount: book.pageCount,
+      imageCount: book.pageCount,
       pdfFile: pdfName,
       quality: qualityMode,
       pageFormat,
-      imageSnapshot: book.imageSnapshot,
-      minimumDpi: pageDiagnostics.length
-        ? Math.round(Math.min(...pageDiagnostics.map((page) => page.effectiveDpi)))
+      sourceMode: vectorMode ? 'vector' : 'raster',
+      sourceSnapshot: book.sourceSnapshot,
+      imageSnapshot: book.sourceSnapshot,
+      minimumDpi: pageDiagnostics.some((page) => Number.isFinite(page.effectiveDpi))
+        ? Math.round(Math.min(...pageDiagnostics.filter((page) => Number.isFinite(page.effectiveDpi)).map((page) => page.effectiveDpi)))
         : null,
       verifiedAt: new Date().toISOString(),
     };
@@ -393,14 +430,17 @@ async function processOneBook(book, qualityMode, pageFormat) {
     book.markerRecord = doneRecord;
     book.sourceChanged = false;
     book.validation = validation;
-    const lowResolutionPages = pageDiagnostics.filter((page) => page.effectiveDpi < 200);
-    const printWarnings = pageDiagnostics.filter((page) => page.effectiveDpi >= 200 && page.effectiveDpi < 300);
+    const rasterDiagnostics = pageDiagnostics.filter((page) => Number.isFinite(page.effectiveDpi));
+    const lowResolutionPages = rasterDiagnostics.filter((page) => page.effectiveDpi < 200);
+    const printWarnings = rasterDiagnostics.filter((page) => page.effectiveDpi >= 200 && page.effectiveDpi < 300);
     if (lowResolutionPages.length > 0) {
       const first = lowResolutionPages[0];
       book.notice = `Print warning: ${lowResolutionPages.length} page(s) are below 200 DPI; lowest is ${Math.round(first.effectiveDpi)} DPI (${first.name}).`;
     } else if (printWarnings.length > 0) {
       const minimum = Math.min(...printWarnings.map((page) => page.effectiveDpi));
       book.notice = `Print check recommended: ${printWarnings.length} page(s) are below 300 DPI; lowest is ${Math.round(minimum)} DPI.`;
+    } else if (vectorMode) {
+      book.notice = validation.warnings[0] || `Verified ${validation.pageCount}-page vector PDF: image cover + selectable worksheet text.`;
     } else {
       book.notice = validation.warnings[0] || `Verified ${validation.pageCount}-page PDF at 300 DPI or better.`;
     }

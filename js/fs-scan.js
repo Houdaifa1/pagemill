@@ -1,7 +1,8 @@
-import { naturalCompare } from './natural-sort.js?v=20260830-3';
-import { createImageSnapshot, imageSnapshotsMatch } from './source-state.js?v=20260830-11';
+import { naturalCompare } from './natural-sort.js?v=20260831-1';
+import { createImageSnapshot, imageSnapshotsMatch } from './source-state.js?v=20260831-1';
 
 const IMAGE_EXT = /\.(png|jpe?g)$/i;
+const PAGE_EXT = /\.(png|jpe?g|svg)$/i;
 const PDF_EXT = /\.pdf$/i;
 const RESERVED_DIRECTORIES = new Set(['_tpt_assets']);
 
@@ -14,7 +15,7 @@ export async function scanBooks(rootHandle) {
   const books = [];
 
   async function scanDirectory(handle, pathParts) {
-    const imageHandles = [];
+    const pageHandles = [];
     const childDirectories = [];
     const pdfNames = [];
     const pdfHandles = [];
@@ -25,8 +26,8 @@ export async function scanBooks(rootHandle) {
         if (!RESERVED_DIRECTORIES.has(childName.toLowerCase())) {
           childDirectories.push({ name: childName, handle: childHandle });
         }
-      } else if (IMAGE_EXT.test(childName)) {
-        imageHandles.push({ name: childName, handle: childHandle });
+      } else if (PAGE_EXT.test(childName)) {
+        pageHandles.push({ name: childName, handle: childHandle });
       } else if (PDF_EXT.test(childName)) {
         pdfNames.push(childName);
         pdfHandles.push({ name: childName, handle: childHandle });
@@ -35,11 +36,13 @@ export async function scanBooks(rootHandle) {
       }
     }
 
-    if (imageHandles.length > 0) {
-      imageHandles.sort((a, b) => naturalCompare(a.name, b.name));
+    if (pageHandles.length > 0) {
+      pageHandles.sort((a, b) => naturalCompare(a.name, b.name));
+      const imageHandles = pageHandles.filter((entry) => IMAGE_EXT.test(entry.name));
+      const svgHandles = pageHandles.filter((entry) => /\.svg$/i.test(entry.name));
       pdfNames.sort(naturalCompare);
       pdfHandles.sort((a, b) => naturalCompare(a.name, b.name));
-      const imageSnapshot = await createImageSnapshot(imageHandles);
+      const sourceSnapshot = await createImageSnapshot(pageHandles);
       let generatedPdfName = null;
       let markerRecord = null;
       if (doneMarker) {
@@ -54,8 +57,9 @@ export async function scanBooks(rootHandle) {
           // Treat the folder as pending and keep every existing PDF protected.
         }
       }
+      const previousSnapshot = markerRecord?.sourceSnapshot || markerRecord?.imageSnapshot;
       const sourceChanged = Boolean(doneMarker) &&
-        !imageSnapshotsMatch(markerRecord?.imageSnapshot, imageSnapshot);
+        !imageSnapshotsMatch(previousSnapshot, sourceSnapshot);
       const recordedPdfExists = generatedPdfName && pdfNames.some(
         (name) => name.toLowerCase() === generatedPdfName.toLowerCase()
       );
@@ -65,9 +69,15 @@ export async function scanBooks(rootHandle) {
         name: pathParts.length > 0 ? pathParts[pathParts.length - 1] : handle.name,
         relativePath: pathParts.length > 0 ? pathParts.join(' / ') : handle.name,
         dirHandle: handle,
+        pageHandles,
+        pageCount: pageHandles.length,
         imageHandles,
-        imageCount: imageHandles.length,
-        imageSnapshot,
+        svgHandles,
+        sourceMode: svgHandles.length > 0 ? 'vector' : 'raster',
+        sourceSnapshot,
+        // Legacy aliases keep old .done records and the raster test harness compatible.
+        imageCount: pageHandles.length,
+        imageSnapshot: sourceSnapshot,
         pdfNames,
         pdfHandles,
         generatedPdfName,

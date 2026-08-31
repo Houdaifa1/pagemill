@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Bindery — Turn image folders into PDFs</title>
-<meta name="description" content="Convert folders of book-page images into print-ready PDFs, entirely in your browser. Nothing is ever uploaded." />
+<title>Bindery — Build print-ready worksheet PDFs</title>
+<meta name="description" content="Build print-ready worksheet PDFs from an image cover and true vector SVG pages, entirely in your browser." />
 
 <link rel="stylesheet" href="css/styles.css?v=20260830-3" />
 </head>
@@ -62,8 +62,8 @@
       </div>
       <h1 class="text-xl font-semibold tracking-tight text-canvas-900 dark:text-canvas-50">No folder selected</h1>
       <p class="mt-2.5 max-w-sm text-sm leading-relaxed text-canvas-500 dark:text-canvas-400">
-        Choose a folder of page images, or a library folder of book subfolders. Any folder
-        with images directly inside becomes one book, ready to bind into a PDF.
+        Choose a book folder or a library of book subfolders. For sharp printable worksheets,
+        use one PNG/JPEG cover first, followed by naturally ordered SVG pages.
       </p>
       <button id="empty-choose-folder-btn" type="button"
         class="mt-7 inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2.5 text-sm font-medium text-white shadow-soft transition-colors duration-150 hover:bg-accent-600 active:scale-[0.98]">
@@ -131,7 +131,7 @@
       </div>
 
       <p id="quality-help" class="mb-4 text-xs text-canvas-500 dark:text-canvas-400">
-        US Letter is recommended for TPT printables. Images are fitted without stretching or cropping. Original quality embeds image bytes unchanged.
+        Vector workflow: first file is the color PNG/JPEG cover; every later file must be a grayscale Letter/A4 SVG with real text. Unsafe, colored, mixed, or unsupported pages are rejected instead of silently changed. Image-only books still use the original raster workflow.
       </p>
 
       <!-- Progress bar (visible while processing) -->
@@ -190,7 +190,10 @@
   </template>
 
   <script src="js/pdf-lib.min.js"></script>
+  <script src="js/purify.min.js"></script>
+  <script src="js/jspdf.umd.min.js"></script>
+  <script src="js/svg2pdf.umd.min.js"></script>
   <script src="js/lucide.min.js"></script>
-  <script type="module" src="js/app.js?v=20260830-13"></script>
+  <script type="module" src="js/app.js?v=20260831-2"></script>
 </body>
 </html>
