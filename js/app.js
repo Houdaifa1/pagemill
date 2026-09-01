@@ -1,7 +1,7 @@
-import { scanBooks } from './fs-scan.js?v=20260830-4';
-import { buildBookPdf } from './pdf-builder.js?v=20260830-3';
-import { runPool } from './pool.js?v=20260830-3';
-import { chooseOutputPdfName } from './output-name.js?v=20260830-4';
+import { scanBooks } from './fs-scan.js?v=20260901-1';
+import { buildBookPdf } from './pdf-builder.js?v=20260901-2';
+import { runPool } from './pool.js?v=20260901-1';
+import { chooseOutputPdfName } from './output-name.js?v=20260901-1';
 
 // Two books at a time keeps memory stable when each book contains dozens of
 // multi-megabyte scans. Higher concurrency can freeze or crash browser tabs.
@@ -166,6 +166,7 @@ async function processOneBook(book, qualityMode) {
     const pdfName = chooseOutputPdfName(book);
     const pdfBytes = await buildBookPdf(book.imageHandles, PDFLib, {
       compress: qualityMode === 'compressed',
+      title: book.name,
     });
 
     const pdfFileHandle = await book.dirHandle.getFileHandle(pdfName, { create: true });

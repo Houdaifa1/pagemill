@@ -1,4 +1,4 @@
-import { naturalCompare } from './natural-sort.js?v=20260830-3';
+import { naturalCompare } from './natural-sort.js?v=20260901-1';
 
 const IMAGE_EXT = /\.(png|jpe?g)$/i;
 const PDF_EXT = /\.pdf$/i;
