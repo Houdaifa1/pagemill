@@ -9,7 +9,7 @@ const PDF_EXT = /\.pdf$/i;
 export async function scanBooks(rootHandle) {
   const books = [];
 
-  async function scanDirectory(handle, pathParts) {
+  async function scanDirectory(handle, pathParts, isSelectedRoot = false) {
     const imageHandles = [];
     const childDirectories = [];
     const pdfNames = [];
@@ -57,21 +57,17 @@ export async function scanBooks(rootHandle) {
     }
 
     childDirectories.sort((a, b) => naturalCompare(a.name, b.name));
+    const childBasePath = isSelectedRoot ? [] : pathParts;
     await Promise.all(
       childDirectories.map((child) =>
-        scanDirectory(child.handle, [...pathParts, child.name])
+        scanDirectory(child.handle, [...childBasePath, child.name])
       )
     );
   }
 
-  const topDirectories = [];
-  for await (const [name, handle] of rootHandle.entries()) {
-    if (handle.kind === 'directory') topDirectories.push({ name, handle });
-  }
-  topDirectories.sort((a, b) => naturalCompare(a.name, b.name));
-  await Promise.all(
-    topDirectories.map((child) => scanDirectory(child.handle, [child.name]))
-  );
+  // The selected folder itself may be a book. Its children still keep the
+  // same relative paths as before, without adding the library root as a prefix.
+  await scanDirectory(rootHandle, [rootHandle.name || 'Selected Folder'], true);
 
   books.sort((a, b) => naturalCompare(a.relativePath, b.relativePath));
   return books;
