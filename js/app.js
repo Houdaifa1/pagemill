@@ -1,12 +1,32 @@
-import { scanBooks } from './fs-scan.js?v=20260901-6';
-import { buildBookPdf, DEFAULT_SQUARE_COVER_COUNT } from './pdf-builder.js?v=20260901-7';
+import { scanBooks } from './fs-scan.js?v=20260902-1';
+import {
+  buildBookPdf,
+  DEFAULT_OCR_LANGUAGE,
+  DEFAULT_SQUARE_COVER_COUNT,
+} from './pdf-builder.js?v=20260902-1';
 import { runPool } from './pool.js?v=20260901-1';
 import { chooseOutputPdfName } from './output-name.js?v=20260901-1';
 
 // Two books at a time keeps memory stable when each book contains dozens of
 // multi-megabyte scans. Higher concurrency can freeze or crash browser tabs.
 const CONCURRENCY = 2;
+// Bumped for searchable text: PDFs written by format 4 have no OCR setting
+// recorded, so they are queued for rebuild when their settings no longer match.
+const DONE_FORMAT_VERSION = 5;
 const PDFLib = window.PDFLib;
+
+// The OCR engine is imported only when searchable text is actually switched on,
+// so the default image-only path never downloads or starts it.
+let ocrModulePromise = null;
+function loadOcrModule() {
+  if (!ocrModulePromise) {
+    ocrModulePromise = import('./ocr.js?v=20260902-1').catch((err) => {
+      ocrModulePromise = null;
+      throw err;
+    });
+  }
+  return ocrModulePromise;
+}
 
 const els = {
   unsupportedGate: document.getElementById('unsupported-gate'),
@@ -23,6 +43,8 @@ const els = {
   squareCoverCountHelp: document.getElementById('square-cover-count-help'),
   pageNumbersEnabled: document.getElementById('page-numbers-enabled'),
   pageNumberHelp: document.getElementById('page-number-help'),
+  searchableTextEnabled: document.getElementById('searchable-text-enabled'),
+  searchableTextHelp: document.getElementById('searchable-text-help'),
   folderPath: document.getElementById('folder-path'),
   folderPathName: document.getElementById('folder-path-name'),
   bookCount: document.getElementById('book-count'),
@@ -34,6 +56,7 @@ const els = {
   progressWrap: document.getElementById('progress-wrap'),
   progressBar: document.getElementById('progress-bar'),
   progressCounter: document.getElementById('progress-counter'),
+  progressDetail: document.getElementById('progress-detail'),
   rowTemplate: document.getElementById('book-row-template'),
 };
 
@@ -58,15 +81,17 @@ function applyCurrentSettingsToBooks() {
   const squareCoverCount = readSquareCoverCount();
   const quality = els.qualitySelect.value;
   const pageNumbersEnabled = els.pageNumbersEnabled.checked;
+  const searchableTextEnabled = els.searchableTextEnabled.checked;
 
   books.forEach((book) => {
     const marker = book.markerRecord;
-    if (!marker || Number(marker.formatVersion) < 4) return;
+    if (!marker || Number(marker.formatVersion) < DONE_FORMAT_VERSION) return;
     if (book.status === 'processing' || book.status === 'error') return;
 
     const matches =
       marker.squareCoverCount === squareCoverCount &&
       marker.pageNumbersEnabled === pageNumbersEnabled &&
+      marker.searchableTextEnabled === searchableTextEnabled &&
       marker.quality === quality;
     book.status = matches ? 'done' : 'pending';
     book.notice = matches ? null : 'Settings changed. Rebuild required.';
@@ -158,6 +183,7 @@ function renderSummary() {
   els.qualitySelect.disabled = isProcessing;
   els.squareCoverCount.disabled = isProcessing;
   els.pageNumbersEnabled.disabled = isProcessing;
+  els.searchableTextEnabled.disabled = isProcessing;
 }
 
 function renderAll() {
@@ -168,12 +194,20 @@ function renderAll() {
 function updateProgress(current, total) {
   if (total === 0) {
     els.progressWrap.classList.add('hidden');
+    setProgressDetail('');
     return;
   }
   els.progressWrap.classList.remove('hidden');
   els.progressCounter.textContent = `${current} / ${total}`;
   const pct = Math.round((current / total) * 100);
   els.progressBar.style.width = `${pct}%`;
+}
+
+// A book can spend minutes inside OCR. Reporting the book, the phase, and the
+// page keeps the tab from looking frozen while nothing else changes on screen.
+function setProgressDetail(message) {
+  els.progressDetail.textContent = message;
+  els.progressDetail.classList.toggle('hidden', !message);
 }
 
 async function loadFolder() {
@@ -204,7 +238,8 @@ async function rescan() {
   renderAll();
 }
 
-async function processOneBook(book, qualityMode, squareCoverCount, pageNumbersEnabled) {
+async function processOneBook(book, settings) {
+  const { qualityMode, squareCoverCount, pageNumbersEnabled, searchableTextEnabled, recognizeWords } = settings;
   const index = books.indexOf(book);
   book.status = 'processing';
   book.error = null;
@@ -218,6 +253,15 @@ async function processOneBook(book, qualityMode, squareCoverCount, pageNumbersEn
       title: book.name,
       squareCoverCount,
       pageNumbersEnabled,
+      searchableText: searchableTextEnabled,
+      recognizeWords,
+      onOcrProgress: ({ phase, completed, total }) => {
+        setProgressDetail(
+          phase === 'ocr'
+            ? `Reading text — ${book.name}: page ${completed + 1} of ${total}`
+            : `Assembling PDF — ${book.name}`
+        );
+      },
     });
 
     const pdfFileHandle = await book.dirHandle.getFileHandle(pdfName, { create: true });
@@ -232,7 +276,9 @@ async function processOneBook(book, qualityMode, squareCoverCount, pageNumbersEn
       quality: qualityMode,
       squareCoverCount,
       pageNumbersEnabled,
-      formatVersion: 4,
+      searchableTextEnabled,
+      ocrLanguage: searchableTextEnabled ? DEFAULT_OCR_LANGUAGE : null,
+      formatVersion: DONE_FORMAT_VERSION,
     };
     const doneFileHandle = await book.dirHandle.getFileHandle('.done', { create: true });
     const doneWritable = await doneFileHandle.createWritable();
@@ -264,17 +310,50 @@ async function processBooks(targetBooks) {
   const qualityMode = els.qualitySelect.value;
   const squareCoverCount = normalizeSquareCoverCount();
   const pageNumbersEnabled = els.pageNumbersEnabled.checked;
+  const searchableTextEnabled = els.searchableTextEnabled.checked;
   updateProgress(0, total);
 
-  await runPool(targetBooks, CONCURRENCY, async (book) => {
-    await processOneBook(book, qualityMode, squareCoverCount, pageNumbersEnabled);
-    completed += 1;
-    updateProgress(completed, total);
-  });
+  let ocr = null;
+  let recognizeWords = null;
+  if (searchableTextEnabled) {
+    setProgressDetail('Starting the local OCR engine\u2026');
+    try {
+      ocr = await loadOcrModule();
+      recognizeWords = (file) => ocr.recognizePageWords(file, { language: DEFAULT_OCR_LANGUAGE });
+    } catch (err) {
+      // Failing to start OCR must not silently produce non-searchable PDFs.
+      console.error('Could not start the OCR engine:', err);
+      targetBooks.forEach((book) => {
+        book.status = 'error';
+        book.error = `Searchable text is on but the OCR engine could not start: ${err.message || err}`;
+      });
+      isProcessing = false;
+      updateProgress(0, 0);
+      renderAll();
+      return;
+    }
+  }
 
-  isProcessing = false;
-  updateProgress(0, 0);
-  renderAll();
+  try {
+    await runPool(targetBooks, CONCURRENCY, async (book) => {
+      await processOneBook(book, {
+        qualityMode,
+        squareCoverCount,
+        pageNumbersEnabled,
+        searchableTextEnabled,
+        recognizeWords,
+      });
+      completed += 1;
+      updateProgress(completed, total);
+    });
+  } finally {
+    // The worker holds a wasm heap; release it as soon as the batch is over,
+    // whether the batch succeeded, failed, or was interrupted.
+    if (ocr) await ocr.terminateOcrWorker();
+    isProcessing = false;
+    updateProgress(0, 0);
+    renderAll();
+  }
 }
 
 function processAllPending() {
@@ -310,6 +389,13 @@ els.pageNumbersEnabled.addEventListener('change', () => {
   els.pageNumberHelp.textContent = els.pageNumbersEnabled.checked
     ? 'Numbering starts at 1 after the covers. The bold badge is a separate PDF layer; page images keep their original geometry and bytes.'
     : 'Page numbering is off. Page images use their original geometry with no numbering layer.';
+  applyCurrentSettingsToBooks();
+  renderAll();
+});
+els.searchableTextEnabled.addEventListener('change', () => {
+  els.searchableTextHelp.textContent = els.searchableTextEnabled.checked
+    ? 'Searchable text is on. Interior pages are read on this computer and an invisible text layer is added over the untouched page image, so the words can be selected, copied, and searched. Covers are skipped. Building takes noticeably longer than an image-only PDF.'
+    : 'Searchable text (OCR) is off for maximum speed, producing an image-only PDF. Turn it on to add an invisible selectable/searchable text layer without changing the page images.';
   applyCurrentSettingsToBooks();
   renderAll();
 });

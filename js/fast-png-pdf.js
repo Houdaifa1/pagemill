@@ -1,3 +1,5 @@
+import { textLayerOperators } from './text-layer.js?v=20260902-1';
+
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const JPEG_SOF_MARKERS = new Set([
   0xc0, 0xc1, 0xc2, 0xc3,
@@ -165,6 +167,7 @@ export function buildDirectImagePdf(
     pageSizeForPage = null,
     placementForPage,
     pageNumberForPage = null,
+    textLayerForPage = null,
     title = 'Bindery PDF',
     onPageProcessed = null,
   }
@@ -192,7 +195,14 @@ export function buildDirectImagePdf(
   const pageObjectNumbers = images.map((_, index) => 3 + index * 3);
   const pageNumbers = images.map((image, index) => pageNumberForPage?.(image, index) ?? null);
   const hasPageNumbers = pageNumbers.some((value) => value !== null);
-  const fontObject = 3 + images.length * 3;
+  // Invisible OCR text runs, already mapped into each page's image placement.
+  const textLayers = images.map((image, index) => textLayerForPage?.(image, index) || []);
+  const hasTextLayer = textLayers.some((items) => items.length > 0);
+  // Object numbers must stay contiguous for the xref table, so optional
+  // objects are allocated only when they are actually written.
+  let nextObjectNumber = 3 + images.length * 3;
+  const fontObject = hasPageNumbers ? nextObjectNumber++ : 0;
+  const textFontObject = hasTextLayer ? nextObjectNumber++ : 0;
   addObject(2, [
     `<< /Type /Pages /Count ${images.length} /Kids [${pageObjectNumbers.map((value) => `${value} 0 R`).join(' ')}] >>`,
   ]);
@@ -204,12 +214,16 @@ export function buildDirectImagePdf(
     const pageSize = pageSizeForPage?.(image, index) || { width: pageWidth, height: pageHeight };
     const placement = placementForPage(image.width, image.height, index, pageSize);
     const pageNumber = pageNumbers[index];
+    const textLayer = textLayers[index];
     const contentParts = [
       'q',
       `${number(placement.width)} 0 0 ${number(placement.height)} ${number(placement.x)} ${number(placement.y)} cm`,
       '/Im0 Do',
       'Q',
     ];
+    // The OCR layer is written before the page number so copied worksheet
+    // sentences read in order and the page number lands at the end of the page.
+    contentParts.push(...textLayerOperators(textLayer, 'F1'));
     if (pageNumber !== null) {
       const pageNumberText = String(pageNumber);
       // Helvetica Bold's tabular digits are 556 font units wide. Centering with
@@ -239,8 +253,11 @@ export function buildDirectImagePdf(
     contentParts.push('');
     const content = contentParts.join('\n');
 
-    const fontResource = pageNumber !== null
-      ? ` /Font << /F0 ${fontObject} 0 R >>`
+    const fontEntries = [];
+    if (pageNumber !== null) fontEntries.push(`/F0 ${fontObject} 0 R`);
+    if (textLayer.length > 0) fontEntries.push(`/F1 ${textFontObject} 0 R`);
+    const fontResource = fontEntries.length > 0
+      ? ` /Font << ${fontEntries.join(' ')} >>`
       : '';
 
     addObject(pageObject, [
@@ -282,6 +299,7 @@ export function buildDirectImagePdf(
       pageKind: pageSize.kind || 'page',
       placement,
       pageNumber,
+      textLayerWordCount: textLayer.length,
     });
   });
 
@@ -290,8 +308,15 @@ export function buildDirectImagePdf(
       '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
     ]);
   }
+  if (hasTextLayer) {
+    // WinAnsiEncoding maps every byte the text layer emits back to the correct
+    // Unicode code point, so accented worksheet text (Bogota\u0301, ninos) copies intact.
+    addObject(textFontObject, [
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    ]);
+  }
 
-  const infoObject = fontObject + (hasPageNumbers ? 1 : 0);
+  const infoObject = nextObjectNumber++;
   addObject(infoObject, [
     `<< /Title (${escapePdfString(title)}) /Subject (Digital book assembled from square cover pages and US Letter interiors) `,
     '/Creator (Bindery) /Producer (Bindery direct image engine) >>',

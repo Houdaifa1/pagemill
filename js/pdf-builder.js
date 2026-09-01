@@ -3,7 +3,8 @@ import {
   buildDirectImagePdf,
   parseDirectJpeg,
   parseDirectRgbPng,
-} from './fast-png-pdf.js?v=20260901-6';
+} from './fast-png-pdf.js?v=20260902-1';
+import { layoutOcrWords } from './text-layer.js?v=20260902-1';
 
 // TPT worksheets are produced as US Letter pages. Images are embedded without
 // re-encoding on the fast path; only the draw rectangle changes.
@@ -11,7 +12,18 @@ export const LETTER_WIDTH = 612;
 export const LETTER_HEIGHT = 792;
 export const DEFAULT_SQUARE_COVER_COUNT = 3;
 export const DEFAULT_PAGE_NUMBERS_ENABLED = false;
+// Searchable text is opt-in: OCR is slower than plain image assembly and the
+// image-only output is what most books need.
+export const DEFAULT_SEARCHABLE_TEXT_ENABLED = false;
+export const DEFAULT_OCR_LANGUAGE = 'eng';
 export const PAGE_NUMBER_FONT_SIZE = 12.5;
+
+// Covers carry stylized marketing type that OCR reads poorly and that nobody
+// searches for, so only interior pages get a text layer.
+export function shouldOcrPage(pageIndex, squareCoverCount = DEFAULT_SQUARE_COVER_COUNT) {
+  const normalizedCount = Math.max(0, Math.floor(Number(squareCoverCount) || 0));
+  return pageIndex >= normalizedCount;
+}
 
 export function getImagePlacement(
   imageWidth,
@@ -66,6 +78,42 @@ export function getPageLayout(
   };
 }
 
+// Writes one page's OCR words as PDF text rendering mode 3 (invisible) using
+// raw content operators. pdf-lib has no render-mode option on drawText, and
+// alpha-based "invisibility" would still be a painting operation.
+function drawInvisibleTextLayer(page, PDFLib, items, font) {
+  const { PDFOperator, PDFOperatorNames: Ops } = PDFLib;
+  const fontKey = page.node.newFontDictionary('BinderyOcrText', font.ref);
+  // pdf-lib sizes operator arguments with `arg.length`, so every numeric
+  // operand must be handed over as a string. Passing raw numbers silently
+  // produces an empty content stream instead of raising an error.
+  const operators = [
+    PDFOperator.of(Ops.PushGraphicsState),
+    PDFOperator.of(Ops.BeginText),
+    PDFOperator.of(Ops.SetTextRenderingMode, ['3']),
+  ];
+  let lastSize = null;
+  let lastScale = null;
+  for (const item of items) {
+    if (item.size !== lastSize) {
+      operators.push(PDFOperator.of(Ops.SetFontAndSize, [fontKey, String(item.size)]));
+      lastSize = item.size;
+    }
+    if (item.horizontalScale !== lastScale) {
+      operators.push(
+        PDFOperator.of(Ops.SetTextHorizontalScaling, [String(item.horizontalScale)])
+      );
+      lastScale = item.horizontalScale;
+    }
+    operators.push(
+      PDFOperator.of(Ops.SetTextMatrix, ['1', '0', '0', '1', String(item.x), String(item.y)])
+    );
+    operators.push(PDFOperator.of(Ops.ShowText, [font.encodeText(item.text)]));
+  }
+  operators.push(PDFOperator.of(Ops.EndText), PDFOperator.of(Ops.PopGraphicsState));
+  page.pushOperators(...operators);
+}
+
 // Builds one PDF from a book's already-naturally-sorted image handles.
 // Pages are read, decoded, and embedded one at a time. A book containing many
 // large scans would otherwise keep every decoded bitmap in memory at once and
@@ -73,12 +121,19 @@ export function getPageLayout(
 async function buildWithPdfLib(
   files,
   PDFLib,
-  { compress, squareCoverCount, pageNumbersEnabled, onPageProcessed }
+  { compress, squareCoverCount, pageNumbersEnabled, ocrWordsByPage, onPageProcessed }
 ) {
   const pdfDoc = await PDFLib.PDFDocument.create();
   const hasNumberedPages = pageNumbersEnabled && files.length > squareCoverCount;
   const pageNumberFont = hasNumberedPages
     ? await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold)
+    : null;
+  const hasOcrWords = Array.isArray(ocrWordsByPage)
+    && ocrWordsByPage.some((words) => words && words.length > 0);
+  // Helvetica with WinAnsiEncoding is what the direct engine uses too, so the
+  // invisible layer is byte-for-byte comparable between the two paths.
+  const textLayerFont = hasOcrWords
+    ? await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica)
     : null;
 
   for (let pageIndex = 0; pageIndex < files.length; pageIndex += 1) {
@@ -106,6 +161,20 @@ async function buildWithPdfLib(
       layout.pageHeight
     );
     page.drawImage(embedded, placement);
+
+    // Invisible OCR text is pushed after the image and before the page number
+    // so the image stays untouched and copied sentences keep their order.
+    const textLayerItems = textLayerFont
+      ? layoutOcrWords(ocrWordsByPage?.[pageIndex] || [], {
+          imageWidth: image.width,
+          imageHeight: image.height,
+          placement,
+        })
+      : [];
+    if (textLayerItems.length > 0) {
+      drawInvisibleTextLayer(page, PDFLib, textLayerItems, textLayerFont);
+    }
+
     if (layout.pageNumber !== null) {
       const pageNumberText = String(layout.pageNumber);
       const textWidth = pageNumberFont.widthOfTextAtSize(pageNumberText, PAGE_NUMBER_FONT_SIZE);
@@ -137,6 +206,7 @@ async function buildWithPdfLib(
       pageKind: layout.kind,
       placement,
       pageNumber: layout.pageNumber,
+      textLayerWordCount: textLayerItems.length,
     });
   }
 
@@ -154,6 +224,9 @@ export async function buildBookPdf(
     title = 'Bindery PDF',
     squareCoverCount = DEFAULT_SQUARE_COVER_COUNT,
     pageNumbersEnabled = DEFAULT_PAGE_NUMBERS_ENABLED,
+    searchableText = DEFAULT_SEARCHABLE_TEXT_ENABLED,
+    recognizeWords = null,
+    onOcrProgress = null,
     onPageProcessed = null,
   } = {}
 ) {
@@ -183,7 +256,74 @@ export async function buildBookPdf(
     }
   }
 
+  // OCR phase. Runs strictly before assembly, one page at a time, so memory
+  // stays flat and progress can be reported honestly. With searchable text off
+  // (the default) nothing here executes and no OCR code is even reachable.
+  const ocrWordsByPage = new Array(files.length).fill(null);
+  if (searchableText && typeof recognizeWords === 'function' && files.length > 0) {
+    const ocrPageIndexes = [];
+    for (let pageIndex = 0; pageIndex < files.length; pageIndex += 1) {
+      if (shouldOcrPage(pageIndex, normalizedSquareCoverCount)) ocrPageIndexes.push(pageIndex);
+    }
+    for (let position = 0; position < ocrPageIndexes.length; position += 1) {
+      const pageIndex = ocrPageIndexes[position];
+      const { file, name } = files[pageIndex];
+      onOcrProgress?.({
+        phase: 'ocr',
+        pageIndex,
+        name,
+        completed: position,
+        total: ocrPageIndexes.length,
+      });
+      const recognized = await recognizeWords(file, {
+        pageIndex,
+        name,
+        completed: position,
+        total: ocrPageIndexes.length,
+      });
+      ocrWordsByPage[pageIndex] = Array.isArray(recognized)
+        ? recognized
+        : (recognized && recognized.words) || [];
+    }
+    onOcrProgress?.({
+      phase: 'assemble',
+      pageIndex: files.length - 1,
+      name: files[files.length - 1].name,
+      completed: ocrPageIndexes.length,
+      total: ocrPageIndexes.length,
+    });
+  }
+  const hasOcrWords = ocrWordsByPage.some((words) => words && words.length > 0);
+
   if (canUseDirect && directImages.length === imageHandles.length) {
+    // Text-layer geometry is derived from the same layout/placement functions
+    // the engine itself uses, so the invisible text can never disagree with
+    // where the image was actually drawn.
+    const directTextLayers = directImages.map((image, index) => {
+      const words = ocrWordsByPage[index];
+      if (!words || words.length === 0) return [];
+      const layout = getPageLayout(
+        image.name,
+        image.width,
+        image.height,
+        index,
+        normalizedSquareCoverCount,
+        pageNumbersEnabled
+      );
+      const placement = getImagePlacement(
+        image.width,
+        image.height,
+        layout.fillPage,
+        layout.pageWidth,
+        layout.pageHeight
+      );
+      return layoutOcrWords(words, {
+        imageWidth: image.width,
+        imageHeight: image.height,
+        placement,
+      });
+    });
+
     return buildDirectImagePdf(directImages, {
       pageWidth: LETTER_WIDTH,
       pageHeight: LETTER_HEIGHT,
@@ -217,6 +357,7 @@ export async function buildBookPdf(
       },
       pageNumberForPage: (_image, index) =>
         getPageNumber(index, normalizedSquareCoverCount, pageNumbersEnabled),
+      textLayerForPage: hasOcrWords ? (_image, index) => directTextLayers[index] : null,
       title,
       onPageProcessed,
     });
@@ -226,6 +367,7 @@ export async function buildBookPdf(
     compress,
     squareCoverCount: normalizedSquareCoverCount,
     pageNumbersEnabled,
+    ocrWordsByPage: hasOcrWords ? ocrWordsByPage : null,
     onPageProcessed,
   });
 }

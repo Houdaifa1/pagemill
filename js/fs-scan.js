@@ -2,6 +2,9 @@ import { naturalCompare } from './natural-sort.js?v=20260901-1';
 
 const IMAGE_EXT = /\.(png|jpe?g)$/i;
 const PDF_EXT = /\.pdf$/i;
+// Markers older than this predate the searchable-text setting and cannot prove
+// whether their PDF matches the current settings, so they are rebuilt.
+const DONE_FORMAT_VERSION = 5;
 
 // Recursively scans every subfolder of `rootHandle`. Each folder containing
 // at least one directly-nested image is one "book". Keeping a book's images
@@ -42,10 +45,11 @@ export async function scanBooks(rootHandle) {
             generatedPdfName = marker.pdfFile;
           }
           markerIsCurrent =
-            Number(marker.formatVersion) >= 4 &&
+            Number(marker.formatVersion) >= DONE_FORMAT_VERSION &&
             Number.isInteger(marker.squareCoverCount) &&
             marker.squareCoverCount >= 0 &&
-            typeof marker.pageNumbersEnabled === 'boolean';
+            typeof marker.pageNumbersEnabled === 'boolean' &&
+            typeof marker.searchableTextEnabled === 'boolean';
         } catch {
           // A malformed marker cannot prove which PDF belongs to Bindery, so
           // the existing PDF remains protected and the book is rebuilt safely.

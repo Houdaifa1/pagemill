@@ -178,6 +178,11 @@
             <span class="relative h-5 w-9 rounded-full bg-canvas-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-accent-500 peer-checked:after:translate-x-4 dark:bg-canvas-700"></span>
             <span class="text-sm font-medium text-canvas-700 dark:text-canvas-200">Page numbers</span>
           </label>
+          <label class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
+            <input id="searchable-text-enabled" type="checkbox" class="peer sr-only" />
+            <span class="relative h-5 w-9 rounded-full bg-canvas-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-accent-500 peer-checked:after:translate-x-4 dark:bg-canvas-700"></span>
+            <span class="text-sm font-medium text-canvas-700 dark:text-canvas-200">Searchable text (OCR)</span>
+          </label>
           <button id="rescan-btn" type="button"
             class="inline-flex items-center gap-1.5 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-transparent px-3 py-2 text-sm font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800">
             <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i>
@@ -199,6 +204,7 @@
       <p id="quality-help" class="mb-4 text-xs text-canvas-500 dark:text-canvas-400">
         The first <span id="square-cover-count-help">3</span> page(s) use true 8.5 &times; 8.5-inch square pages (2550 &times; 2550 px at 300 PPI); all remaining pages use 8.5 &times; 11-inch US Letter (2550 &times; 3300 px). Images are fitted without stretching or cropping.
         <span id="page-number-help">Page numbering is off by default. When enabled, a bold number badge is added without resizing, moving, cropping, or re-encoding the page image.</span>
+        <span id="searchable-text-help">Searchable text (OCR) is off for maximum speed, producing an image-only PDF. When enabled, page images stay byte-for-byte unchanged and an invisible text layer is added over the interior pages so readers can select, copy, and search the words. OCR runs entirely on this computer and takes noticeably longer than normal PDF generation.</span>
       </p>
 
       <!-- Progress bar (visible while processing) -->
@@ -210,6 +216,7 @@
           </span>
           <span id="progress-counter" class="font-mono text-canvas-500 dark:text-canvas-400">0 / 0</span>
         </div>
+        <p id="progress-detail" class="mt-1.5 hidden truncate text-xs text-canvas-500 dark:text-canvas-400"></p>
         <div class="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-canvas-200 dark:bg-canvas-800">
           <div id="progress-bar" class="h-full rounded-full bg-accent-500 transition-[width] duration-300 ease-out" style="width: 0%"></div>
         </div>
@@ -254,6 +261,6 @@
 
   <script src="js/pdf-lib.min.js?v=20260901-1"></script>
   <script src="js/lucide.min.js?v=20260901-1"></script>
-  <script type="module" src="js/app.js?v=20260901-9"></script>
+  <script type="module" src="js/app.js?v=20260902-1"></script>
 </body>
 </html>
