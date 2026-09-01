@@ -1,4 +1,10 @@
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+const JPEG_SOF_MARKERS = new Set([
+  0xc0, 0xc1, 0xc2, 0xc3,
+  0xc5, 0xc6, 0xc7,
+  0xc9, 0xca, 0xcb,
+  0xcd, 0xce, 0xcf,
+]);
 const encoder = new TextEncoder();
 
 function readUint32(bytes, offset) {
@@ -72,7 +78,53 @@ export function parseDirectRgbPng(bytes, name = 'PNG') {
     return { supported: false, reason: `${name}: PNG requires compatibility mode` };
   }
 
-  return { supported: true, width, height, idatChunks, idatLength };
+  return { supported: true, format: 'png', width, height, idatChunks, idatLength };
+}
+
+export function parseDirectJpeg(bytes, name = 'JPEG') {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+    return { supported: false, reason: `${name}: invalid JPEG signature` };
+  }
+
+  let offset = 2;
+  while (offset < bytes.length) {
+    while (offset < bytes.length && bytes[offset] !== 0xff) offset += 1;
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.length) break;
+
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > bytes.length) break;
+
+    const segmentLength = (bytes[offset] << 8) | bytes[offset + 1];
+    if (segmentLength < 2 || offset + segmentLength > bytes.length) break;
+
+    if (JPEG_SOF_MARKERS.has(marker)) {
+      if (segmentLength < 8) break;
+      const bitsPerComponent = bytes[offset + 2];
+      const height = (bytes[offset + 3] << 8) | bytes[offset + 4];
+      const width = (bytes[offset + 5] << 8) | bytes[offset + 6];
+      const components = bytes[offset + 7];
+      if (!width || !height || bitsPerComponent !== 8 || ![1, 3].includes(components)) {
+        return { supported: false, reason: `${name}: JPEG requires compatibility mode` };
+      }
+      return {
+        supported: true,
+        format: 'jpg',
+        width,
+        height,
+        bitsPerComponent,
+        colorSpace: components === 1 ? '/DeviceGray' : '/DeviceRGB',
+        bytes,
+      };
+    }
+
+    offset += segmentLength;
+  }
+
+  return { supported: false, reason: `${name}: unsupported or incomplete JPEG data` };
 }
 
 function escapePdfString(value) {
@@ -84,9 +136,16 @@ function number(value) {
   return Object.is(rounded, -0) ? '0' : String(rounded);
 }
 
-export function buildDirectRgbPngPdf(
+export function buildDirectImagePdf(
   images,
-  { pageWidth, pageHeight, placementForPage, title = 'Bindery PDF', onPageProcessed = null }
+  {
+    pageWidth,
+    pageHeight,
+    pageSizeForPage = null,
+    placementForPage,
+    title = 'Bindery PDF',
+    onPageProcessed = null,
+  }
 ) {
   const parts = [];
   const offsets = [];
@@ -117,7 +176,8 @@ export function buildDirectRgbPngPdf(
     const pageObject = pageObjectNumbers[index];
     const imageObject = pageObject + 1;
     const contentObject = pageObject + 2;
-    const placement = placementForPage(image.width, image.height, index);
+    const pageSize = pageSizeForPage?.(image, index) || { width: pageWidth, height: pageHeight };
+    const placement = placementForPage(image.width, image.height, index, pageSize);
     const content = [
       'q',
       `${number(placement.width)} 0 0 ${number(placement.height)} ${number(placement.x)} ${number(placement.y)} cm`,
@@ -127,17 +187,27 @@ export function buildDirectRgbPngPdf(
     ].join('\n');
 
     addObject(pageObject, [
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] `,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${number(pageSize.width)} ${number(pageSize.height)}] `,
       `/Resources << /XObject << /Im0 ${imageObject} 0 R >> >> /Contents ${contentObject} 0 R >>`,
     ]);
-    addObject(imageObject, [
-      `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} `,
-      `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Interpolate false `,
-      `/Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns ${image.width} >> `,
-      `/Length ${image.idatLength} >>\nstream\n`,
-      ...image.idatChunks,
-      '\nendstream',
-    ]);
+    if (image.format === 'jpg') {
+      addObject(imageObject, [
+        `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} `,
+        `/ColorSpace ${image.colorSpace} /BitsPerComponent ${image.bitsPerComponent} /Interpolate false `,
+        `/Filter /DCTDecode /Length ${image.bytes.length} >>\nstream\n`,
+        image.bytes,
+        '\nendstream',
+      ]);
+    } else {
+      addObject(imageObject, [
+        `<< /Type /XObject /Subtype /Image /Width ${image.width} /Height ${image.height} `,
+        `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Interpolate false `,
+        `/Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns ${image.width} >> `,
+        `/Length ${image.idatLength} >>\nstream\n`,
+        ...image.idatChunks,
+        '\nendstream',
+      ]);
+    }
     const contentBytes = encoder.encode(content);
     addObject(contentObject, [
       `<< /Length ${contentBytes.length} >>\nstream\n`,
@@ -145,13 +215,22 @@ export function buildDirectRgbPngPdf(
       'endstream',
     ]);
 
-    onPageProcessed?.({ index, name: image.name, width: image.width, height: image.height, placement });
+    onPageProcessed?.({
+      index,
+      name: image.name,
+      width: image.width,
+      height: image.height,
+      pageWidth: pageSize.width,
+      pageHeight: pageSize.height,
+      pageKind: pageSize.kind || 'page',
+      placement,
+    });
   });
 
   const infoObject = 3 + images.length * 3;
   addObject(infoObject, [
-    `<< /Title (${escapePdfString(title)}) /Subject (US Letter book assembled from naturally ordered PNG pages) `,
-    '/Creator (Bindery) /Producer (Bindery direct PNG engine) >>',
+    `<< /Title (${escapePdfString(title)}) /Subject (Digital book assembled from square cover pages and US Letter interiors) `,
+    '/Creator (Bindery) /Producer (Bindery direct image engine) >>',
   ]);
 
   const xrefOffset = byteLength;
@@ -171,3 +250,7 @@ export function buildDirectRgbPngPdf(
   }
   return output;
 }
+
+
+// Backward-compatible export for existing callers and fixtures.
+export const buildDirectRgbPngPdf = buildDirectImagePdf;

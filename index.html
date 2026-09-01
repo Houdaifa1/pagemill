@@ -165,6 +165,14 @@
               <option value="compressed">High-quality compressed</option>
             </select>
           </div>
+          <label for="square-cover-count" class="sr-only">Number of square cover pages</label>
+          <div class="flex items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
+            <i data-lucide="square-stack" class="h-3.5 w-3.5 text-canvas-400"></i>
+            <span class="text-sm font-medium text-canvas-700 dark:text-canvas-200">Square covers</span>
+            <input id="square-cover-count" type="number" min="0" step="1" value="3"
+              inputmode="numeric" aria-label="Number of square cover pages"
+              class="w-12 rounded-md border border-canvas-200 dark:border-canvas-700 bg-white dark:bg-canvas-850 px-2 py-0.5 text-center font-mono text-sm font-medium text-canvas-800 dark:text-canvas-100 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20" />
+          </div>
           <button id="rescan-btn" type="button"
             class="inline-flex items-center gap-1.5 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-transparent px-3 py-2 text-sm font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800">
             <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i>
@@ -184,7 +192,7 @@
       </div>
 
       <p id="quality-help" class="mb-4 text-xs text-canvas-500 dark:text-canvas-400">
-        Original quality embeds images unchanged. High-quality compressed keeps the original page dimensions and reduces file size where possible.
+        The first <span id="square-cover-count-help">3</span> page(s) use true 8.5 &times; 8.5-inch square pages (2550 &times; 2550 px at 300 PPI); all remaining pages use 8.5 &times; 11-inch US Letter (2550 &times; 3300 px). Images are fitted without stretching or cropping.
       </p>
 
       <!-- Progress bar (visible while processing) -->
@@ -240,6 +248,6 @@
 
   <script src="js/pdf-lib.min.js?v=20260901-1"></script>
   <script src="js/lucide.min.js?v=20260901-1"></script>
-  <script type="module" src="js/app.js?v=20260901-3"></script>
+  <script type="module" src="js/app.js?v=20260901-7"></script>
 </body>
 </html>

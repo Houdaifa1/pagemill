@@ -31,18 +31,23 @@ export async function scanBooks(rootHandle) {
       imageHandles.sort((a, b) => naturalCompare(a.name, b.name));
       pdfNames.sort(naturalCompare);
       let generatedPdfName = null;
+      let markerRecord = null;
+      let markerIsCurrent = false;
       if (doneMarker) {
         try {
           const markerFile = await doneMarker.getFile();
           const marker = JSON.parse(await markerFile.text());
+          markerRecord = marker;
           if (typeof marker.pdfFile === 'string' && marker.pdfFile.trim()) {
             generatedPdfName = marker.pdfFile;
           }
+          markerIsCurrent = Number.isInteger(marker.squareCoverCount) && marker.squareCoverCount >= 0;
         } catch {
-          // A malformed marker still means "done", but it cannot prove which
-          // PDF belongs to Bindery, so existing PDFs remain protected.
+          // A malformed marker cannot prove which PDF belongs to Bindery, so
+          // the existing PDF remains protected and the book is rebuilt safely.
         }
       }
+      const needsUpgrade = Boolean(doneMarker) && !markerIsCurrent;
       books.push({
         name: pathParts[pathParts.length - 1],
         relativePath: pathParts.join(' / '),
@@ -51,7 +56,9 @@ export async function scanBooks(rootHandle) {
         imageCount: imageHandles.length,
         pdfNames,
         generatedPdfName,
-        status: doneMarker || pdfNames.length > 0 ? 'done' : 'pending',
+        markerRecord,
+        status: markerIsCurrent || (!doneMarker && pdfNames.length > 0) ? 'done' : 'pending',
+        notice: needsUpgrade ? 'Built by an older Bindery version. Rebuild required.' : null,
         error: null,
       });
     }

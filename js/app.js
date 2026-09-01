@@ -1,5 +1,5 @@
-import { scanBooks } from './fs-scan.js?v=20260901-3';
-import { buildBookPdf } from './pdf-builder.js?v=20260901-2';
+import { scanBooks } from './fs-scan.js?v=20260901-4';
+import { buildBookPdf, DEFAULT_SQUARE_COVER_COUNT } from './pdf-builder.js?v=20260901-5';
 import { runPool } from './pool.js?v=20260901-1';
 import { chooseOutputPdfName } from './output-name.js?v=20260901-1';
 
@@ -19,6 +19,8 @@ const els = {
   redoAllBtn: document.getElementById('redo-all-btn'),
   processAllBtn: document.getElementById('process-all-btn'),
   qualitySelect: document.getElementById('quality-select'),
+  squareCoverCount: document.getElementById('square-cover-count'),
+  squareCoverCountHelp: document.getElementById('square-cover-count-help'),
   folderPath: document.getElementById('folder-path'),
   folderPathName: document.getElementById('folder-path-name'),
   bookCount: document.getElementById('book-count'),
@@ -37,6 +39,18 @@ const els = {
 let books = [];
 let rootHandle = null;
 let isProcessing = false;
+
+function readSquareCoverCount() {
+  const parsed = Number.parseInt(els.squareCoverCount.value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_SQUARE_COVER_COUNT;
+}
+
+function normalizeSquareCoverCount() {
+  const count = readSquareCoverCount();
+  els.squareCoverCount.value = String(count);
+  els.squareCoverCountHelp.textContent = String(count);
+  return count;
+}
 
 function refreshIcons() {
   if (window.lucide) window.lucide.createIcons();
@@ -71,10 +85,20 @@ function renderBookRow(book, index) {
   node.querySelector('.status-pill-wrap').innerHTML = pillMarkup(book.status);
 
   const errorEl = node.querySelector('.book-error');
-  if (book.status === 'error' && book.error) {
+  const message = book.status === 'error' ? book.error : book.notice;
+  if (message) {
     errorEl.classList.remove('hidden');
     errorEl.classList.add('flex');
-    errorEl.innerHTML = `<i data-lucide="info" class="h-3.5 w-3.5 shrink-0"></i><span class="truncate">${book.error}</span>`;
+    errorEl.classList.toggle('text-danger', book.status === 'error');
+    errorEl.classList.toggle('text-warn', book.status !== 'error');
+    errorEl.replaceChildren();
+    const icon = document.createElement('i');
+    icon.dataset.lucide = 'info';
+    icon.className = 'h-3.5 w-3.5 shrink-0';
+    const text = document.createElement('span');
+    text.className = 'truncate';
+    text.textContent = message;
+    errorEl.append(icon, text);
   } else {
     errorEl.classList.add('hidden');
     errorEl.classList.remove('flex');
@@ -111,6 +135,7 @@ function renderSummary() {
   els.processAllBtn.disabled = isProcessing || pending === 0;
   els.redoAllBtn.disabled = isProcessing || books.length === 0;
   els.qualitySelect.disabled = isProcessing;
+  els.squareCoverCount.disabled = isProcessing;
 }
 
 function renderAll() {
@@ -156,10 +181,11 @@ async function rescan() {
   renderAll();
 }
 
-async function processOneBook(book, qualityMode) {
+async function processOneBook(book, qualityMode, squareCoverCount) {
   const index = books.indexOf(book);
   book.status = 'processing';
   book.error = null;
+  book.notice = null;
   renderAll();
 
   try {
@@ -167,6 +193,7 @@ async function processOneBook(book, qualityMode) {
     const pdfBytes = await buildBookPdf(book.imageHandles, PDFLib, {
       compress: qualityMode === 'compressed',
       title: book.name,
+      squareCoverCount,
     });
 
     const pdfFileHandle = await book.dirHandle.getFileHandle(pdfName, { create: true });
@@ -179,6 +206,8 @@ async function processOneBook(book, qualityMode) {
       imageCount: book.imageCount,
       pdfFile: pdfName,
       quality: qualityMode,
+      squareCoverCount,
+      formatVersion: 2,
     };
     const doneFileHandle = await book.dirHandle.getFileHandle('.done', { create: true });
     const doneWritable = await doneFileHandle.createWritable();
@@ -207,10 +236,11 @@ async function processBooks(targetBooks) {
   let completed = 0;
   const total = targetBooks.length;
   const qualityMode = els.qualitySelect.value;
+  const squareCoverCount = normalizeSquareCoverCount();
   updateProgress(0, total);
 
   await runPool(targetBooks, CONCURRENCY, async (book) => {
-    await processOneBook(book, qualityMode);
+    await processOneBook(book, qualityMode, squareCoverCount);
     completed += 1;
     updateProgress(completed, total);
   });
@@ -234,7 +264,15 @@ els.emptyChooseFolderBtn.addEventListener('click', loadFolder);
 els.rescanBtn.addEventListener('click', rescan);
 els.redoAllBtn.addEventListener('click', redoAllBooks);
 els.processAllBtn.addEventListener('click', processAllPending);
+els.squareCoverCount.addEventListener('input', () => {
+  const parsed = Number.parseInt(els.squareCoverCount.value, 10);
+  if (Number.isFinite(parsed) && parsed >= 0) {
+    els.squareCoverCountHelp.textContent = String(parsed);
+  }
+});
+els.squareCoverCount.addEventListener('change', normalizeSquareCoverCount);
 
 if (checkBrowserSupport()) {
+  normalizeSquareCoverCount();
   refreshIcons();
 }
