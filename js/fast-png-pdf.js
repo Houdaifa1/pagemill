@@ -6,8 +6,8 @@ const JPEG_SOF_MARKERS = new Set([
   0xcd, 0xce, 0xcf,
 ]);
 const encoder = new TextEncoder();
-const PAGE_NUMBER_FONT_SIZE = 10;
-const PAGE_NUMBER_BASELINE = 11;
+const PAGE_NUMBER_FONT_SIZE = 12.5;
+const PAGE_NUMBER_BASELINE = 4.5;
 
 function readUint32(bytes, offset) {
   return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, false);
@@ -138,6 +138,25 @@ function number(value) {
   return Object.is(rounded, -0) ? '0' : String(rounded);
 }
 
+function roundedRectPath(x, y, width, height) {
+  const radius = height / 2;
+  const control = radius * 0.55228475;
+  const right = x + width;
+  const top = y + height;
+  return [
+    `${number(x + radius)} ${number(y)} m`,
+    `${number(right - radius)} ${number(y)} l`,
+    `${number(right - radius + control)} ${number(y)} ${number(right)} ${number(y + radius - control)} ${number(right)} ${number(y + radius)} c`,
+    `${number(right)} ${number(top - radius)} l`,
+    `${number(right)} ${number(top - radius + control)} ${number(right - radius + control)} ${number(top)} ${number(right - radius)} ${number(top)} c`,
+    `${number(x + radius)} ${number(top)} l`,
+    `${number(x + radius - control)} ${number(top)} ${number(x)} ${number(top - radius + control)} ${number(x)} ${number(top - radius)} c`,
+    `${number(x)} ${number(y + radius)} l`,
+    `${number(x)} ${number(y + radius - control)} ${number(x + radius - control)} ${number(y)} ${number(x + radius)} ${number(y)} c`,
+    'h',
+  ].join('\n');
+}
+
 export function buildDirectImagePdf(
   images,
   {
@@ -193,14 +212,25 @@ export function buildDirectImagePdf(
     ];
     if (pageNumber !== null) {
       const pageNumberText = String(pageNumber);
-      // Helvetica's tabular digits are 556 font units wide. Centering with
+      // Helvetica Bold's tabular digits are 556 font units wide. Centering with
       // the real glyph width keeps one-, two-, and three-digit books aligned.
       const textWidth = pageNumberText.length * PAGE_NUMBER_FONT_SIZE * 0.556;
       const textX = (pageSize.width - textWidth) / 2;
+      const badgeWidth = Math.max(20, textWidth + 8);
+      const badgeX = (pageSize.width - badgeWidth) / 2;
+      contentParts.push(
+        'q',
+        '1 g',
+        '0.18 G',
+        '0.8 w',
+        roundedRectPath(badgeX, 1, badgeWidth, 16),
+        'B',
+        'Q'
+      );
       contentParts.push(
         'BT',
         `/F0 ${PAGE_NUMBER_FONT_SIZE} Tf`,
-        '0.34 g',
+        '0.1 g',
         `1 0 0 1 ${number(textX)} ${PAGE_NUMBER_BASELINE} Tm`,
         `(${pageNumberText}) Tj`,
         'ET'
@@ -257,7 +287,7 @@ export function buildDirectImagePdf(
 
   if (hasPageNumbers) {
     addObject(fontObject, [
-      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
     ]);
   }
 

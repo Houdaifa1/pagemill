@@ -3,35 +3,31 @@ import {
   buildDirectImagePdf,
   parseDirectJpeg,
   parseDirectRgbPng,
-} from './fast-png-pdf.js?v=20260901-5';
+} from './fast-png-pdf.js?v=20260901-6';
 
 // TPT worksheets are produced as US Letter pages. Images are embedded without
 // re-encoding on the fast path; only the draw rectangle changes.
 export const LETTER_WIDTH = 612;
 export const LETTER_HEIGHT = 792;
 export const DEFAULT_SQUARE_COVER_COUNT = 3;
-export const DEFAULT_PAGE_NUMBERS_ENABLED = true;
-export const PAGE_NUMBER_FOOTER_HEIGHT = 30;
-export const PAGE_NUMBER_FONT_SIZE = 10;
+export const DEFAULT_PAGE_NUMBERS_ENABLED = false;
+export const PAGE_NUMBER_FONT_SIZE = 12.5;
 
 export function getImagePlacement(
   imageWidth,
   imageHeight,
   fillPage = false,
   pageWidth = LETTER_WIDTH,
-  pageHeight = LETTER_HEIGHT,
-  safeBottom = 0
+  pageHeight = LETTER_HEIGHT
 ) {
-  const normalizedSafeBottom = Math.max(0, Math.min(Number(safeBottom) || 0, pageHeight - 1));
-  const availableHeight = pageHeight - normalizedSafeBottom;
   const scale = fillPage
-    ? Math.max(pageWidth / imageWidth, availableHeight / imageHeight)
-    : Math.min(pageWidth / imageWidth, availableHeight / imageHeight);
+    ? Math.max(pageWidth / imageWidth, pageHeight / imageHeight)
+    : Math.min(pageWidth / imageWidth, pageHeight / imageHeight);
   const width = imageWidth * scale;
   const height = imageHeight * scale;
   return {
     x: (pageWidth - width) / 2,
-    y: normalizedSafeBottom + (availableHeight - height) / 2,
+    y: (pageHeight - height) / 2,
     width,
     height,
   };
@@ -67,7 +63,6 @@ export function getPageLayout(
     fillPage: false,
     kind: squareCover ? 'square-cover' : 'interior',
     pageNumber,
-    safeBottom: pageNumber === null ? 0 : PAGE_NUMBER_FOOTER_HEIGHT,
   };
 }
 
@@ -83,7 +78,7 @@ async function buildWithPdfLib(
   const pdfDoc = await PDFLib.PDFDocument.create();
   const hasNumberedPages = pageNumbersEnabled && files.length > squareCoverCount;
   const pageNumberFont = hasNumberedPages
-    ? await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica)
+    ? await pdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold)
     : null;
 
   for (let pageIndex = 0; pageIndex < files.length; pageIndex += 1) {
@@ -108,19 +103,28 @@ async function buildWithPdfLib(
       image.height,
       layout.fillPage,
       layout.pageWidth,
-      layout.pageHeight,
-      layout.safeBottom
+      layout.pageHeight
     );
     page.drawImage(embedded, placement);
     if (layout.pageNumber !== null) {
       const pageNumberText = String(layout.pageNumber);
       const textWidth = pageNumberFont.widthOfTextAtSize(pageNumberText, PAGE_NUMBER_FONT_SIZE);
+      const badgeWidth = Math.max(20, textWidth + 8);
+      page.drawEllipse({
+        x: layout.pageWidth / 2,
+        y: 9,
+        xScale: badgeWidth / 2,
+        yScale: 8,
+        color: PDFLib.rgb(1, 1, 1),
+        borderColor: PDFLib.rgb(0.18, 0.18, 0.2),
+        borderWidth: 0.8,
+      });
       page.drawText(pageNumberText, {
         x: (layout.pageWidth - textWidth) / 2,
-        y: 10,
+        y: 4.5,
         size: PAGE_NUMBER_FONT_SIZE,
         font: pageNumberFont,
-        color: PDFLib.rgb(0.34, 0.34, 0.38),
+        color: PDFLib.rgb(0.1, 0.1, 0.12),
       });
     }
     onPageProcessed?.({
@@ -208,8 +212,7 @@ export async function buildBookPdf(
           height,
           layout.fillPage,
           pageSize.width,
-          pageSize.height,
-          layout.safeBottom
+          pageSize.height
         );
       },
       pageNumberForPage: (_image, index) =>

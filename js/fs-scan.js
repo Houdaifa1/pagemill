@@ -42,7 +42,7 @@ export async function scanBooks(rootHandle) {
             generatedPdfName = marker.pdfFile;
           }
           markerIsCurrent =
-            Number(marker.formatVersion) >= 3 &&
+            Number(marker.formatVersion) >= 4 &&
             Number.isInteger(marker.squareCoverCount) &&
             marker.squareCoverCount >= 0 &&
             typeof marker.pageNumbersEnabled === 'boolean';

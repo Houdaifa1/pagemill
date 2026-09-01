@@ -1,5 +1,5 @@
-import { scanBooks } from './fs-scan.js?v=20260901-5';
-import { buildBookPdf, DEFAULT_SQUARE_COVER_COUNT } from './pdf-builder.js?v=20260901-6';
+import { scanBooks } from './fs-scan.js?v=20260901-6';
+import { buildBookPdf, DEFAULT_SQUARE_COVER_COUNT } from './pdf-builder.js?v=20260901-7';
 import { runPool } from './pool.js?v=20260901-1';
 import { chooseOutputPdfName } from './output-name.js?v=20260901-1';
 
@@ -61,7 +61,7 @@ function applyCurrentSettingsToBooks() {
 
   books.forEach((book) => {
     const marker = book.markerRecord;
-    if (!marker || Number(marker.formatVersion) < 3) return;
+    if (!marker || Number(marker.formatVersion) < 4) return;
     if (book.status === 'processing' || book.status === 'error') return;
 
     const matches =
@@ -232,7 +232,7 @@ async function processOneBook(book, qualityMode, squareCoverCount, pageNumbersEn
       quality: qualityMode,
       squareCoverCount,
       pageNumbersEnabled,
-      formatVersion: 3,
+      formatVersion: 4,
     };
     const doneFileHandle = await book.dirHandle.getFileHandle('.done', { create: true });
     const doneWritable = await doneFileHandle.createWritable();
@@ -308,8 +308,8 @@ els.qualitySelect.addEventListener('change', () => {
 });
 els.pageNumbersEnabled.addEventListener('change', () => {
   els.pageNumberHelp.textContent = els.pageNumbersEnabled.checked
-    ? 'Interior numbering starts at 1 after the covers in a dedicated footer, so it never covers artwork or worksheet content.'
-    : 'Page numbering is off; interior images use the full Letter page area.';
+    ? 'Numbering starts at 1 after the covers. The bold badge is a separate PDF layer; page images keep their original geometry and bytes.'
+    : 'Page numbering is off. Page images use their original geometry with no numbering layer.';
   applyCurrentSettingsToBooks();
   renderAll();
 });
