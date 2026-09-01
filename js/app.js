@@ -1,5 +1,5 @@
-import { scanBooks } from './fs-scan.js?v=20260901-4';
-import { buildBookPdf, DEFAULT_SQUARE_COVER_COUNT } from './pdf-builder.js?v=20260901-5';
+import { scanBooks } from './fs-scan.js?v=20260901-5';
+import { buildBookPdf, DEFAULT_SQUARE_COVER_COUNT } from './pdf-builder.js?v=20260901-6';
 import { runPool } from './pool.js?v=20260901-1';
 import { chooseOutputPdfName } from './output-name.js?v=20260901-1';
 
@@ -21,6 +21,8 @@ const els = {
   qualitySelect: document.getElementById('quality-select'),
   squareCoverCount: document.getElementById('square-cover-count'),
   squareCoverCountHelp: document.getElementById('square-cover-count-help'),
+  pageNumbersEnabled: document.getElementById('page-numbers-enabled'),
+  pageNumberHelp: document.getElementById('page-number-help'),
   folderPath: document.getElementById('folder-path'),
   folderPathName: document.getElementById('folder-path-name'),
   bookCount: document.getElementById('book-count'),
@@ -50,6 +52,25 @@ function normalizeSquareCoverCount() {
   els.squareCoverCount.value = String(count);
   els.squareCoverCountHelp.textContent = String(count);
   return count;
+}
+
+function applyCurrentSettingsToBooks() {
+  const squareCoverCount = readSquareCoverCount();
+  const quality = els.qualitySelect.value;
+  const pageNumbersEnabled = els.pageNumbersEnabled.checked;
+
+  books.forEach((book) => {
+    const marker = book.markerRecord;
+    if (!marker || Number(marker.formatVersion) < 3) return;
+    if (book.status === 'processing' || book.status === 'error') return;
+
+    const matches =
+      marker.squareCoverCount === squareCoverCount &&
+      marker.pageNumbersEnabled === pageNumbersEnabled &&
+      marker.quality === quality;
+    book.status = matches ? 'done' : 'pending';
+    book.notice = matches ? null : 'Settings changed. Rebuild required.';
+  });
 }
 
 function refreshIcons() {
@@ -136,6 +157,7 @@ function renderSummary() {
   els.redoAllBtn.disabled = isProcessing || books.length === 0;
   els.qualitySelect.disabled = isProcessing;
   els.squareCoverCount.disabled = isProcessing;
+  els.pageNumbersEnabled.disabled = isProcessing;
 }
 
 function renderAll() {
@@ -178,10 +200,11 @@ async function loadFolder() {
 async function rescan() {
   if (!rootHandle) return;
   books = await scanBooks(rootHandle);
+  applyCurrentSettingsToBooks();
   renderAll();
 }
 
-async function processOneBook(book, qualityMode, squareCoverCount) {
+async function processOneBook(book, qualityMode, squareCoverCount, pageNumbersEnabled) {
   const index = books.indexOf(book);
   book.status = 'processing';
   book.error = null;
@@ -194,6 +217,7 @@ async function processOneBook(book, qualityMode, squareCoverCount) {
       compress: qualityMode === 'compressed',
       title: book.name,
       squareCoverCount,
+      pageNumbersEnabled,
     });
 
     const pdfFileHandle = await book.dirHandle.getFileHandle(pdfName, { create: true });
@@ -207,7 +231,8 @@ async function processOneBook(book, qualityMode, squareCoverCount) {
       pdfFile: pdfName,
       quality: qualityMode,
       squareCoverCount,
-      formatVersion: 2,
+      pageNumbersEnabled,
+      formatVersion: 3,
     };
     const doneFileHandle = await book.dirHandle.getFileHandle('.done', { create: true });
     const doneWritable = await doneFileHandle.createWritable();
@@ -215,6 +240,7 @@ async function processOneBook(book, qualityMode, squareCoverCount) {
     await doneWritable.close();
 
     book.generatedPdfName = pdfName;
+    book.markerRecord = doneRecord;
     if (!book.pdfNames.some((name) => name.toLowerCase() === pdfName.toLowerCase())) {
       book.pdfNames.push(pdfName);
     }
@@ -237,10 +263,11 @@ async function processBooks(targetBooks) {
   const total = targetBooks.length;
   const qualityMode = els.qualitySelect.value;
   const squareCoverCount = normalizeSquareCoverCount();
+  const pageNumbersEnabled = els.pageNumbersEnabled.checked;
   updateProgress(0, total);
 
   await runPool(targetBooks, CONCURRENCY, async (book) => {
-    await processOneBook(book, qualityMode, squareCoverCount);
+    await processOneBook(book, qualityMode, squareCoverCount, pageNumbersEnabled);
     completed += 1;
     updateProgress(completed, total);
   });
@@ -271,6 +298,21 @@ els.squareCoverCount.addEventListener('input', () => {
   }
 });
 els.squareCoverCount.addEventListener('change', normalizeSquareCoverCount);
+els.squareCoverCount.addEventListener('change', () => {
+  applyCurrentSettingsToBooks();
+  renderAll();
+});
+els.qualitySelect.addEventListener('change', () => {
+  applyCurrentSettingsToBooks();
+  renderAll();
+});
+els.pageNumbersEnabled.addEventListener('change', () => {
+  els.pageNumberHelp.textContent = els.pageNumbersEnabled.checked
+    ? 'Interior numbering starts at 1 after the covers in a dedicated footer, so it never covers artwork or worksheet content.'
+    : 'Page numbering is off; interior images use the full Letter page area.';
+  applyCurrentSettingsToBooks();
+  renderAll();
+});
 
 if (checkBrowserSupport()) {
   normalizeSquareCoverCount();

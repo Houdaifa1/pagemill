@@ -3,32 +3,48 @@ import {
   buildDirectImagePdf,
   parseDirectJpeg,
   parseDirectRgbPng,
-} from './fast-png-pdf.js?v=20260901-4';
+} from './fast-png-pdf.js?v=20260901-5';
 
 // TPT worksheets are produced as US Letter pages. Images are embedded without
 // re-encoding on the fast path; only the draw rectangle changes.
 export const LETTER_WIDTH = 612;
 export const LETTER_HEIGHT = 792;
 export const DEFAULT_SQUARE_COVER_COUNT = 3;
+export const DEFAULT_PAGE_NUMBERS_ENABLED = true;
+export const PAGE_NUMBER_FOOTER_HEIGHT = 30;
+export const PAGE_NUMBER_FONT_SIZE = 10;
 
 export function getImagePlacement(
   imageWidth,
   imageHeight,
   fillPage = false,
   pageWidth = LETTER_WIDTH,
-  pageHeight = LETTER_HEIGHT
+  pageHeight = LETTER_HEIGHT,
+  safeBottom = 0
 ) {
+  const normalizedSafeBottom = Math.max(0, Math.min(Number(safeBottom) || 0, pageHeight - 1));
+  const availableHeight = pageHeight - normalizedSafeBottom;
   const scale = fillPage
-    ? Math.max(pageWidth / imageWidth, pageHeight / imageHeight)
-    : Math.min(pageWidth / imageWidth, pageHeight / imageHeight);
+    ? Math.max(pageWidth / imageWidth, availableHeight / imageHeight)
+    : Math.min(pageWidth / imageWidth, availableHeight / imageHeight);
   const width = imageWidth * scale;
   const height = imageHeight * scale;
   return {
     x: (pageWidth - width) / 2,
-    y: (pageHeight - height) / 2,
+    y: normalizedSafeBottom + (availableHeight - height) / 2,
     width,
     height,
   };
+}
+
+export function getPageNumber(
+  pageIndex,
+  squareCoverCount = DEFAULT_SQUARE_COVER_COUNT,
+  pageNumbersEnabled = DEFAULT_PAGE_NUMBERS_ENABLED
+) {
+  if (!pageNumbersEnabled) return null;
+  const normalizedCount = Math.max(0, Math.floor(Number(squareCoverCount) || 0));
+  return pageIndex < normalizedCount ? null : pageIndex - normalizedCount + 1;
 }
 
 // The user explicitly chooses how many leading marketplace covers/thumbnails
@@ -39,15 +55,19 @@ export function getPageLayout(
   imageWidth,
   imageHeight,
   pageIndex,
-  squareCoverCount = DEFAULT_SQUARE_COVER_COUNT
+  squareCoverCount = DEFAULT_SQUARE_COVER_COUNT,
+  pageNumbersEnabled = DEFAULT_PAGE_NUMBERS_ENABLED
 ) {
   const normalizedCount = Math.max(0, Math.floor(Number(squareCoverCount) || 0));
   const squareCover = pageIndex < normalizedCount;
+  const pageNumber = getPageNumber(pageIndex, normalizedCount, pageNumbersEnabled);
   return {
     pageWidth: LETTER_WIDTH,
     pageHeight: squareCover ? LETTER_WIDTH : LETTER_HEIGHT,
     fillPage: false,
     kind: squareCover ? 'square-cover' : 'interior',
+    pageNumber,
+    safeBottom: pageNumber === null ? 0 : PAGE_NUMBER_FOOTER_HEIGHT,
   };
 }
 
@@ -55,8 +75,16 @@ export function getPageLayout(
 // Pages are read, decoded, and embedded one at a time. A book containing many
 // large scans would otherwise keep every decoded bitmap in memory at once and
 // can freeze the browser.
-async function buildWithPdfLib(files, PDFLib, { compress, squareCoverCount, onPageProcessed }) {
+async function buildWithPdfLib(
+  files,
+  PDFLib,
+  { compress, squareCoverCount, pageNumbersEnabled, onPageProcessed }
+) {
   const pdfDoc = await PDFLib.PDFDocument.create();
+  const hasNumberedPages = pageNumbersEnabled && files.length > squareCoverCount;
+  const pageNumberFont = hasNumberedPages
+    ? await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica)
+    : null;
 
   for (let pageIndex = 0; pageIndex < files.length; pageIndex += 1) {
     const { file, name } = files[pageIndex];
@@ -66,16 +94,35 @@ async function buildWithPdfLib(files, PDFLib, { compress, squareCoverCount, onPa
         ? await pdfDoc.embedPng(image.bytes)
         : await pdfDoc.embedJpg(image.bytes);
 
-    const layout = getPageLayout(name, image.width, image.height, pageIndex, squareCoverCount);
+    const layout = getPageLayout(
+      name,
+      image.width,
+      image.height,
+      pageIndex,
+      squareCoverCount,
+      pageNumbersEnabled
+    );
     const page = pdfDoc.addPage([layout.pageWidth, layout.pageHeight]);
     const placement = getImagePlacement(
       image.width,
       image.height,
       layout.fillPage,
       layout.pageWidth,
-      layout.pageHeight
+      layout.pageHeight,
+      layout.safeBottom
     );
     page.drawImage(embedded, placement);
+    if (layout.pageNumber !== null) {
+      const pageNumberText = String(layout.pageNumber);
+      const textWidth = pageNumberFont.widthOfTextAtSize(pageNumberText, PAGE_NUMBER_FONT_SIZE);
+      page.drawText(pageNumberText, {
+        x: (layout.pageWidth - textWidth) / 2,
+        y: 10,
+        size: PAGE_NUMBER_FONT_SIZE,
+        font: pageNumberFont,
+        color: PDFLib.rgb(0.34, 0.34, 0.38),
+      });
+    }
     onPageProcessed?.({
       pageIndex,
       name,
@@ -85,6 +132,7 @@ async function buildWithPdfLib(files, PDFLib, { compress, squareCoverCount, onPa
       pageHeight: layout.pageHeight,
       pageKind: layout.kind,
       placement,
+      pageNumber: layout.pageNumber,
     });
   }
 
@@ -101,6 +149,7 @@ export async function buildBookPdf(
     compress = false,
     title = 'Bindery PDF',
     squareCoverCount = DEFAULT_SQUARE_COVER_COUNT,
+    pageNumbersEnabled = DEFAULT_PAGE_NUMBERS_ENABLED,
     onPageProcessed = null,
   } = {}
 ) {
@@ -140,7 +189,8 @@ export async function buildBookPdf(
           image.width,
           image.height,
           index,
-          normalizedSquareCoverCount
+          normalizedSquareCoverCount,
+          pageNumbersEnabled
         );
         return { width: layout.pageWidth, height: layout.pageHeight, kind: layout.kind };
       },
@@ -150,10 +200,20 @@ export async function buildBookPdf(
           width,
           height,
           index,
-          normalizedSquareCoverCount
+          normalizedSquareCoverCount,
+          pageNumbersEnabled
         );
-        return getImagePlacement(width, height, layout.fillPage, pageSize.width, pageSize.height);
+        return getImagePlacement(
+          width,
+          height,
+          layout.fillPage,
+          pageSize.width,
+          pageSize.height,
+          layout.safeBottom
+        );
       },
+      pageNumberForPage: (_image, index) =>
+        getPageNumber(index, normalizedSquareCoverCount, pageNumbersEnabled),
       title,
       onPageProcessed,
     });
@@ -162,6 +222,7 @@ export async function buildBookPdf(
   return buildWithPdfLib(files, PDFLib, {
     compress,
     squareCoverCount: normalizedSquareCoverCount,
+    pageNumbersEnabled,
     onPageProcessed,
   });
 }

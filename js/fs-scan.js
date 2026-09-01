@@ -41,7 +41,11 @@ export async function scanBooks(rootHandle) {
           if (typeof marker.pdfFile === 'string' && marker.pdfFile.trim()) {
             generatedPdfName = marker.pdfFile;
           }
-          markerIsCurrent = Number.isInteger(marker.squareCoverCount) && marker.squareCoverCount >= 0;
+          markerIsCurrent =
+            Number(marker.formatVersion) >= 3 &&
+            Number.isInteger(marker.squareCoverCount) &&
+            marker.squareCoverCount >= 0 &&
+            typeof marker.pageNumbersEnabled === 'boolean';
         } catch {
           // A malformed marker cannot prove which PDF belongs to Bindery, so
           // the existing PDF remains protected and the book is rebuilt safely.

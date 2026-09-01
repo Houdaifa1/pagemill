@@ -6,6 +6,8 @@ const JPEG_SOF_MARKERS = new Set([
   0xcd, 0xce, 0xcf,
 ]);
 const encoder = new TextEncoder();
+const PAGE_NUMBER_FONT_SIZE = 10;
+const PAGE_NUMBER_BASELINE = 11;
 
 function readUint32(bytes, offset) {
   return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, false);
@@ -143,6 +145,7 @@ export function buildDirectImagePdf(
     pageHeight,
     pageSizeForPage = null,
     placementForPage,
+    pageNumberForPage = null,
     title = 'Bindery PDF',
     onPageProcessed = null,
   }
@@ -168,6 +171,9 @@ export function buildDirectImagePdf(
   addObject(1, ['<< /Type /Catalog /Pages 2 0 R >>']);
 
   const pageObjectNumbers = images.map((_, index) => 3 + index * 3);
+  const pageNumbers = images.map((image, index) => pageNumberForPage?.(image, index) ?? null);
+  const hasPageNumbers = pageNumbers.some((value) => value !== null);
+  const fontObject = 3 + images.length * 3;
   addObject(2, [
     `<< /Type /Pages /Count ${images.length} /Kids [${pageObjectNumbers.map((value) => `${value} 0 R`).join(' ')}] >>`,
   ]);
@@ -178,17 +184,38 @@ export function buildDirectImagePdf(
     const contentObject = pageObject + 2;
     const pageSize = pageSizeForPage?.(image, index) || { width: pageWidth, height: pageHeight };
     const placement = placementForPage(image.width, image.height, index, pageSize);
-    const content = [
+    const pageNumber = pageNumbers[index];
+    const contentParts = [
       'q',
       `${number(placement.width)} 0 0 ${number(placement.height)} ${number(placement.x)} ${number(placement.y)} cm`,
       '/Im0 Do',
       'Q',
-      '',
-    ].join('\n');
+    ];
+    if (pageNumber !== null) {
+      const pageNumberText = String(pageNumber);
+      // Helvetica's tabular digits are 556 font units wide. Centering with
+      // the real glyph width keeps one-, two-, and three-digit books aligned.
+      const textWidth = pageNumberText.length * PAGE_NUMBER_FONT_SIZE * 0.556;
+      const textX = (pageSize.width - textWidth) / 2;
+      contentParts.push(
+        'BT',
+        `/F0 ${PAGE_NUMBER_FONT_SIZE} Tf`,
+        '0.34 g',
+        `1 0 0 1 ${number(textX)} ${PAGE_NUMBER_BASELINE} Tm`,
+        `(${pageNumberText}) Tj`,
+        'ET'
+      );
+    }
+    contentParts.push('');
+    const content = contentParts.join('\n');
+
+    const fontResource = pageNumber !== null
+      ? ` /Font << /F0 ${fontObject} 0 R >>`
+      : '';
 
     addObject(pageObject, [
       `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${number(pageSize.width)} ${number(pageSize.height)}] `,
-      `/Resources << /XObject << /Im0 ${imageObject} 0 R >> >> /Contents ${contentObject} 0 R >>`,
+      `/Resources << /XObject << /Im0 ${imageObject} 0 R >>${fontResource} >> /Contents ${contentObject} 0 R >>`,
     ]);
     if (image.format === 'jpg') {
       addObject(imageObject, [
@@ -224,10 +251,17 @@ export function buildDirectImagePdf(
       pageHeight: pageSize.height,
       pageKind: pageSize.kind || 'page',
       placement,
+      pageNumber,
     });
   });
 
-  const infoObject = 3 + images.length * 3;
+  if (hasPageNumbers) {
+    addObject(fontObject, [
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    ]);
+  }
+
+  const infoObject = fontObject + (hasPageNumbers ? 1 : 0);
   addObject(infoObject, [
     `<< /Title (${escapePdfString(title)}) /Subject (Digital book assembled from square cover pages and US Letter interiors) `,
     '/Creator (Bindery) /Producer (Bindery direct image engine) >>',
