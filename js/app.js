@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 let ocrModulePromise = null;
 function loadOcrModule() {
   if (!ocrModulePromise) {
-    ocrModulePromise = import('./ocr.js?v=20260902-1').catch((err) => {
+    ocrModulePromise = import('./ocr.js?v=20260902-2').catch((err) => {
       ocrModulePromise = null;
       throw err;
     });

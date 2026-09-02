@@ -7,13 +7,13 @@
 // and no measurable cost.
 //
 // The engine, the wasm core, and the English model are vendored under
-// js/vendor/tesseract/ and served from this app's own origin. No page image and
+// vendor/tesseract/ and served from this app's own origin. No page image and
 // no recognized text is ever sent anywhere — recognition happens inside a Web
 // Worker in the same browser tab.
 
 export const DEFAULT_OCR_LANGUAGE = 'eng';
 
-const VENDOR_BASE = new URL('./vendor/tesseract/', import.meta.url).href;
+const VENDOR_BASE = new URL('../vendor/tesseract/', import.meta.url).href;
 const WORKER_PATH = `${VENDOR_BASE}worker.min.js`;
 const LANG_PATH = `${VENDOR_BASE}lang`;
 const ENGINE_MODULE = `${VENDOR_BASE}tesseract.esm.min.js`;
