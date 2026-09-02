@@ -3,7 +3,7 @@ import {
   buildBookPdf,
   DEFAULT_OCR_LANGUAGE,
   DEFAULT_SQUARE_COVER_COUNT,
-} from './pdf-builder.js?v=20260902-1';
+} from './pdf-builder.js?v=20260902-2';
 import { runPool } from './pool.js?v=20260901-1';
 import { chooseOutputPdfName } from './output-name.js?v=20260901-1';
 
@@ -20,7 +20,7 @@ const PDFLib = window.PDFLib;
 let ocrModulePromise = null;
 function loadOcrModule() {
   if (!ocrModulePromise) {
-    ocrModulePromise = import('./ocr.js?v=20260902-2').catch((err) => {
+    ocrModulePromise = import('./ocr.js?v=20260902-3').catch((err) => {
       ocrModulePromise = null;
       throw err;
     });
@@ -239,7 +239,10 @@ async function rescan() {
 }
 
 async function processOneBook(book, settings) {
-  const { qualityMode, squareCoverCount, pageNumbersEnabled, searchableTextEnabled, recognizeWords } = settings;
+  const {
+    qualityMode, squareCoverCount, pageNumbersEnabled,
+    searchableTextEnabled, recognizeWords, ocrConcurrency,
+  } = settings;
   const index = books.indexOf(book);
   book.status = 'processing';
   book.error = null;
@@ -255,10 +258,11 @@ async function processOneBook(book, settings) {
       pageNumbersEnabled,
       searchableText: searchableTextEnabled,
       recognizeWords,
+      ocrConcurrency,
       onOcrProgress: ({ phase, completed, total }) => {
         setProgressDetail(
           phase === 'ocr'
-            ? `Reading text — ${book.name}: page ${completed + 1} of ${total}`
+            ? `Reading text — ${book.name}: ${completed} of ${total} pages`
             : `Assembling PDF — ${book.name}`
         );
       },
@@ -315,10 +319,15 @@ async function processBooks(targetBooks) {
 
   let ocr = null;
   let recognizeWords = null;
+  // Recognition is CPU-bound, so a few pages are read at once. The pool is
+  // sized from the machine's cores and capped, keeping memory bounded.
+  let ocrConcurrency = 1;
   if (searchableTextEnabled) {
     setProgressDetail('Starting the local OCR engine\u2026');
     try {
       ocr = await loadOcrModule();
+      ocrConcurrency = ocr.recommendedOcrConcurrency();
+      await ocr.configureOcrPool(ocrConcurrency);
       recognizeWords = (file) => ocr.recognizePageWords(file, { language: DEFAULT_OCR_LANGUAGE });
     } catch (err) {
       // Failing to start OCR must not silently produce non-searchable PDFs.
@@ -342,6 +351,7 @@ async function processBooks(targetBooks) {
         pageNumbersEnabled,
         searchableTextEnabled,
         recognizeWords,
+        ocrConcurrency,
       });
       completed += 1;
       updateProgress(completed, total);

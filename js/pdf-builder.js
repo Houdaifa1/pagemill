@@ -5,6 +5,7 @@ import {
   parseDirectRgbPng,
 } from './fast-png-pdf.js?v=20260902-1';
 import { layoutOcrWords } from './text-layer.js?v=20260902-1';
+import { runPool } from './pool.js?v=20260901-1';
 
 // TPT worksheets are produced as US Letter pages. Images are embedded without
 // re-encoding on the fast path; only the draw rectangle changes.
@@ -226,6 +227,7 @@ export async function buildBookPdf(
     pageNumbersEnabled = DEFAULT_PAGE_NUMBERS_ENABLED,
     searchableText = DEFAULT_SEARCHABLE_TEXT_ENABLED,
     recognizeWords = null,
+    ocrConcurrency = 1,
     onOcrProgress = null,
     onPageProcessed = null,
   } = {}
@@ -265,33 +267,35 @@ export async function buildBookPdf(
     for (let pageIndex = 0; pageIndex < files.length; pageIndex += 1) {
       if (shouldOcrPage(pageIndex, normalizedSquareCoverCount)) ocrPageIndexes.push(pageIndex);
     }
-    for (let position = 0; position < ocrPageIndexes.length; position += 1) {
-      const pageIndex = ocrPageIndexes[position];
+    const total = ocrPageIndexes.length;
+    // Recognition is the slow part and it is CPU-bound, so a few pages run at
+    // once. Results are stored by page index, so the page order of the finished
+    // PDF does not depend on which page happens to finish first. Concurrency is
+    // capped by the caller, which bounds how many decoded pages are in memory.
+    const lanes = Math.max(1, Math.min(Math.floor(Number(ocrConcurrency) || 1), total));
+    let completed = 0;
+    const results = await runPool(ocrPageIndexes, lanes, async (pageIndex) => {
       const { file, name } = files[pageIndex];
-      onOcrProgress?.({
-        phase: 'ocr',
-        pageIndex,
-        name,
-        completed: position,
-        total: ocrPageIndexes.length,
-      });
-      const recognized = await recognizeWords(file, {
-        pageIndex,
-        name,
-        completed: position,
-        total: ocrPageIndexes.length,
-      });
+      const recognized = await recognizeWords(file, { pageIndex, name, completed, total });
       ocrWordsByPage[pageIndex] = Array.isArray(recognized)
         ? recognized
         : (recognized && recognized.words) || [];
-    }
-    onOcrProgress?.({
-      phase: 'assemble',
-      pageIndex: files.length - 1,
-      name: files[files.length - 1].name,
-      completed: ocrPageIndexes.length,
-      total: ocrPageIndexes.length,
+      completed += 1;
+      onOcrProgress?.({ phase: 'ocr', pageIndex, name, completed, total });
     });
+    // runPool isolates failures so one bad page cannot abandon the others
+    // mid-flight; surface the first one so the book fails honestly.
+    const failure = results.find((result) => result && result.ok === false);
+    if (failure) throw failure.error;
+    if (total > 0) {
+      onOcrProgress?.({
+        phase: 'assemble',
+        pageIndex: files.length - 1,
+        name: files[files.length - 1].name,
+        completed: total,
+        total,
+      });
+    }
   }
   const hasOcrWords = ocrWordsByPage.some((words) => words && words.length > 0);
 

@@ -20,12 +20,25 @@ const ENGINE_MODULE = `${VENDOR_BASE}tesseract.esm.min.js`;
 // OEM 1 = LSTM only, which matches the vendored -lstm wasm cores.
 const OCR_ENGINE_MODE = 1;
 
+// Recognition is CPU-bound and single-threaded per worker, so a small pool of
+// workers is what turns a 12-core machine from 1x into ~4x. The pool is capped
+// rather than sized to core count: each worker holds its own WebAssembly heap
+// and one decoded page, and unbounded workers would trade a freeze for a crash.
+export const MAX_OCR_WORKERS = 4;
+
+export function recommendedOcrConcurrency(cores = globalThis.navigator?.hardwareConcurrency) {
+  const detected = Number(cores);
+  if (!Number.isFinite(detected) || detected < 2) return 1;
+  return Math.max(1, Math.min(MAX_OCR_WORKERS, Math.floor(detected / 3)));
+}
+
 let enginePromise = null;
-let workerPromise = null;
-let workerLanguage = null;
-// One shared worker serves every book, so recognition is serialized through
-// this chain instead of racing two concurrently-processed books.
-let queue = Promise.resolve();
+let poolLanguage = null;
+let poolSize = 1;
+// Workers currently free to take a page, and callers waiting for one.
+let idleWorkers = [];
+let liveWorkerCount = 0;
+let waiters = [];
 
 async function loadEngine() {
   if (!enginePromise) {
@@ -40,46 +53,95 @@ async function loadEngine() {
   return enginePromise;
 }
 
-/**
- * Returns the single shared Tesseract worker, creating it on first use.
- * `onStatus` receives Tesseract's own loading/recognition progress events.
- */
-export async function getOcrWorker(language = DEFAULT_OCR_LANGUAGE, onStatus = null) {
-  if (workerPromise && workerLanguage !== language) {
-    await terminateOcrWorker();
-  }
-  if (!workerPromise) {
-    workerLanguage = language;
-    const engine = await loadEngine();
-    workerPromise = engine
-      .createWorker(language, OCR_ENGINE_MODE, {
-        workerPath: WORKER_PATH,
-        corePath: VENDOR_BASE,
-        langPath: LANG_PATH,
-        gzip: true,
-        logger: (message) => onStatus?.(message),
-      })
-      .catch((err) => {
-        workerPromise = null;
-        workerLanguage = null;
-        throw new Error(`Could not start the OCR engine: ${err.message || err}`);
-      });
-  }
-  return workerPromise;
+/** Sets how many pages may be recognized at once. Takes effect on next use. */
+export async function configureOcrPool(size) {
+  const next = Math.max(1, Math.min(MAX_OCR_WORKERS, Math.floor(Number(size) || 1)));
+  if (next === poolSize) return;
+  // Shrinking mid-batch would strand in-flight work, so the pool is rebuilt
+  // from scratch; callers set this before a batch, not during one.
+  await terminateOcrWorker();
+  poolSize = next;
 }
 
-/** Shuts the shared worker down and forgets it, so the next run starts clean. */
-export async function terminateOcrWorker() {
-  const pending = workerPromise;
-  workerPromise = null;
-  workerLanguage = null;
-  if (!pending) return;
+async function createWorker(language, onStatus) {
+  const engine = await loadEngine();
+  return engine.createWorker(language, OCR_ENGINE_MODE, {
+    workerPath: WORKER_PATH,
+    corePath: VENDOR_BASE,
+    langPath: LANG_PATH,
+    gzip: true,
+    logger: (message) => onStatus?.(message),
+  });
+}
+
+// Hands out a free worker, starting a new one only while the pool has room.
+async function acquireWorker(language, onStatus) {
+  if (poolLanguage !== null && poolLanguage !== language) {
+    await terminateOcrWorker();
+  }
+  poolLanguage = language;
+
+  const existing = idleWorkers.pop();
+  if (existing) return existing;
+
+  if (liveWorkerCount < poolSize) {
+    liveWorkerCount += 1;
+    try {
+      return await createWorker(language, onStatus);
+    } catch (err) {
+      liveWorkerCount -= 1;
+      throw new Error(`Could not start the OCR engine: ${err.message || err}`);
+    }
+  }
+
+  return new Promise((resolve) => waiters.push(resolve));
+}
+
+// Returns a worker to the pool, or hands it straight to the next page waiting.
+function releaseWorker(worker) {
+  const waiter = waiters.shift();
+  if (waiter) waiter(worker);
+  else idleWorkers.push(worker);
+}
+
+// A crashed worker cannot be reused. Drop it and let the pool start a fresh
+// one on demand, so one bad page never poisons the rest of the batch.
+async function discardWorker(worker) {
+  liveWorkerCount = Math.max(0, liveWorkerCount - 1);
   try {
-    const worker = await pending;
     await worker.terminate();
   } catch {
-    // A worker that already died cannot be terminated again; nothing to do.
+    // Already dead; nothing to clean up.
   }
+  const waiter = waiters.shift();
+  if (waiter) {
+    // Someone is blocked on a worker that no longer exists. Give the pool room
+    // to build a replacement instead of leaving that page waiting forever.
+    acquireWorker(poolLanguage, null).then(waiter, () => waiter(null));
+  }
+}
+
+/** Kept for callers and tests that just want one ready worker. */
+export async function getOcrWorker(language = DEFAULT_OCR_LANGUAGE, onStatus = null) {
+  const worker = await acquireWorker(language, onStatus);
+  releaseWorker(worker);
+  return worker;
+}
+
+/** Shuts every pooled worker down, so the next batch starts clean. */
+export async function terminateOcrWorker() {
+  const workers = idleWorkers;
+  idleWorkers = [];
+  waiters = [];
+  liveWorkerCount = 0;
+  poolLanguage = null;
+  await Promise.all(workers.map(async (worker) => {
+    try {
+      await worker.terminate();
+    } catch {
+      // A worker that already died cannot be terminated again.
+    }
+  }));
 }
 
 // Tesseract returns a block/paragraph/line/word tree. Walking it keeps natural
@@ -114,24 +176,19 @@ export function flattenRecognizedWords(data) {
  * Rejects on failure so the caller can fail that one book loudly instead of
  * writing a PDF that merely pretends to be searchable.
  */
-export function recognizePageWords(image, { language = DEFAULT_OCR_LANGUAGE, onStatus = null } = {}) {
-  const run = async () => {
-    const worker = await getOcrWorker(language, onStatus);
-    try {
-      const { data } = await worker.recognize(image, {}, { text: false, blocks: true });
-      return flattenRecognizedWords(data);
-    } catch (err) {
-      // A crashed wasm worker cannot be reused; drop it so the next book
-      // starts from a clean engine rather than inheriting a broken one.
-      await terminateOcrWorker();
-      throw new Error(`OCR failed: ${err && err.message ? err.message : err}`);
-    }
-  };
-
-  const result = queue.then(run, run);
-  queue = result.then(
-    () => undefined,
-    () => undefined
-  );
-  return result;
+export async function recognizePageWords(
+  image,
+  { language = DEFAULT_OCR_LANGUAGE, onStatus = null } = {}
+) {
+  const worker = await acquireWorker(language, onStatus);
+  if (!worker) throw new Error('OCR failed: no worker available');
+  try {
+    const { data } = await worker.recognize(image, {}, { text: false, blocks: true });
+    const words = flattenRecognizedWords(data);
+    releaseWorker(worker);
+    return words;
+  } catch (err) {
+    await discardWorker(worker);
+    throw new Error(`OCR failed: ${err && err.message ? err.message : err}`);
+  }
 }
