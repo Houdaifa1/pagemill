@@ -6,6 +6,7 @@ import {
 } from './pdf-builder.js?v=20260902-2';
 import { runPool } from './pool.js?v=20260901-1';
 import { chooseOutputPdfName } from './output-name.js?v=20260901-1';
+import { extractImagesFromArchives } from './archive-extractor.js?v=20260906-2';
 
 // Two books at a time keeps memory stable when each book contains dozens of
 // multi-megabyte scans. Higher concurrency can freeze or crash browser tabs.
@@ -35,6 +36,11 @@ const els = {
   libraryView: document.getElementById('library-view'),
   chooseFolderBtn: document.getElementById('choose-folder-btn'),
   emptyChooseFolderBtn: document.getElementById('empty-choose-folder-btn'),
+  extractArchivesBtn: document.getElementById('extract-archives-btn'),
+  emptyExtractArchivesBtn: document.getElementById('empty-extract-archives-btn'),
+  archiveStatus: document.getElementById('archive-status'),
+  archiveStatusTitle: document.getElementById('archive-status-title'),
+  archiveStatusDetail: document.getElementById('archive-status-detail'),
   rescanBtn: document.getElementById('rescan-btn'),
   redoAllBtn: document.getElementById('redo-all-btn'),
   processAllBtn: document.getElementById('process-all-btn'),
@@ -64,6 +70,7 @@ const els = {
 let books = [];
 let rootHandle = null;
 let isProcessing = false;
+let isExtracting = false;
 
 function readSquareCoverCount() {
   const parsed = Number.parseInt(els.squareCoverCount.value, 10);
@@ -89,6 +96,7 @@ function applyCurrentSettingsToBooks() {
     if (book.status === 'processing' || book.status === 'error') return;
 
     const matches =
+      marker.imageCount === book.imageCount &&
       marker.squareCoverCount === squareCoverCount &&
       marker.pageNumbersEnabled === pageNumbersEnabled &&
       marker.searchableTextEnabled === searchableTextEnabled &&
@@ -178,12 +186,18 @@ function renderSummary() {
   els.errorCount.textContent = String(errored);
   els.errorCountWrap.classList.toggle('hidden', errored === 0);
 
-  els.processAllBtn.disabled = isProcessing || pending === 0;
-  els.redoAllBtn.disabled = isProcessing || books.length === 0;
-  els.qualitySelect.disabled = isProcessing;
-  els.squareCoverCount.disabled = isProcessing;
-  els.pageNumbersEnabled.disabled = isProcessing;
-  els.searchableTextEnabled.disabled = isProcessing;
+  const isBusy = isProcessing || isExtracting;
+  els.processAllBtn.disabled = isBusy || pending === 0;
+  els.redoAllBtn.disabled = isBusy || books.length === 0;
+  els.rescanBtn.disabled = isBusy;
+  els.qualitySelect.disabled = isBusy;
+  els.squareCoverCount.disabled = isBusy;
+  els.pageNumbersEnabled.disabled = isBusy;
+  els.searchableTextEnabled.disabled = isBusy;
+  els.chooseFolderBtn.disabled = isBusy;
+  els.emptyChooseFolderBtn.disabled = isBusy;
+  els.extractArchivesBtn.disabled = isBusy;
+  els.emptyExtractArchivesBtn.disabled = isBusy;
 }
 
 function renderAll() {
@@ -211,6 +225,7 @@ function setProgressDetail(message) {
 }
 
 async function loadFolder() {
+  if (isProcessing || isExtracting) return;
   let handle;
   try {
     handle = await window.showDirectoryPicker({ mode: 'readwrite' });
@@ -229,6 +244,102 @@ async function loadFolder() {
   els.emptyState.classList.add('hidden');
   els.libraryView.classList.remove('hidden');
   els.libraryView.classList.add('flex');
+}
+
+function showSelectedFolder(handle) {
+  rootHandle = handle;
+  els.folderPath.classList.remove('hidden');
+  els.folderPath.classList.add('flex');
+  els.folderPathName.textContent = handle.name;
+}
+
+function showLibrary() {
+  els.emptyState.classList.add('hidden');
+  els.libraryView.classList.remove('hidden');
+  els.libraryView.classList.add('flex');
+}
+
+function setArchiveStatus(title, detail = '') {
+  els.archiveStatus.classList.remove('hidden');
+  els.archiveStatus.classList.add('flex');
+  els.archiveStatusTitle.textContent = title;
+  els.archiveStatusDetail.textContent = detail;
+  refreshIcons();
+}
+
+// Extractor errors already begin with the archive's filename, and the failure
+// record carries its full folder path. Printing both verbatim would repeat the
+// name ("corrupt.zip: corrupt.zip: ..."), so drop the redundant prefix.
+function describeArchiveFailure(failure) {
+  const fileName = failure.archive.split(' / ').pop();
+  const detail = failure.error.startsWith(`${fileName}: `)
+    ? failure.error.slice(fileName.length + 2)
+    : failure.error;
+  return `${failure.archive}: ${detail}`;
+}
+
+async function extractArchives() {
+  if (isProcessing || isExtracting) return;
+
+  let handle;
+  try {
+    handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    throw err;
+  }
+
+  showSelectedFolder(handle);
+  isExtracting = true;
+  renderSummary();
+  setArchiveStatus('Scanning for archives…', 'Checking this folder and every folder inside it.');
+
+  try {
+    const result = await extractImagesFromArchives(handle, {
+      onProgress: ({ phase, archive, archivesFound, archivesProcessed, imagesWritten }) => {
+        if (phase === 'extract') {
+          setArchiveStatus(
+            `Extracting archive ${archivesProcessed + 1} of ${archivesFound}…`,
+            `${archive} · ${imagesWritten} image${imagesWritten === 1 ? '' : 's'} copied so far`
+          );
+        }
+      },
+    });
+
+    rootHandle = handle;
+    await rescan();
+    showLibrary();
+
+    if (result.archivesFound === 0) {
+      setArchiveStatus(
+        'No supported archives found',
+        'Bindery looked in every folder for ZIP, TAR, TAR.GZ, TGZ, and image GZ files. Nothing was changed.'
+      );
+    } else if (result.failures.length > 0) {
+      const succeeded = result.archivesFound - result.failures.length;
+      // Every failure goes to the console so a folder with several bad
+      // archives can be inspected in full; the status line shows the first.
+      result.failures.forEach((failure) => {
+        console.warn(`Archive skipped — ${describeArchiveFailure(failure)}`);
+      });
+      const remaining = result.failures.length - 1;
+      setArchiveStatus(
+        `Finished with ${result.failures.length} archive error${result.failures.length === 1 ? '' : 's'}`,
+        `${result.imagesWritten} image${result.imagesWritten === 1 ? '' : 's'} extracted from ${succeeded} archive${succeeded === 1 ? '' : 's'}. ${describeArchiveFailure(result.failures[0])}${remaining > 0 ? ` (+${remaining} more in the console)` : ''}`
+      );
+    } else {
+      setArchiveStatus(
+        'Archive extraction complete',
+        `${result.imagesWritten} new image${result.imagesWritten === 1 ? '' : 's'} extracted from ${result.archivesFound} archive${result.archivesFound === 1 ? '' : 's'}; ${result.imagesAlreadyPresent} identical image${result.imagesAlreadyPresent === 1 ? '' : 's'} already present. Ready for normal PDF creation.`
+      );
+    }
+  } catch (err) {
+    console.error('Archive extraction failed:', err);
+    setArchiveStatus('Archive extraction failed', err.message || String(err));
+  } finally {
+    isExtracting = false;
+    renderAll();
+  }
 }
 
 async function rescan() {
@@ -377,6 +488,8 @@ function redoAllBooks() {
 
 els.chooseFolderBtn.addEventListener('click', loadFolder);
 els.emptyChooseFolderBtn.addEventListener('click', loadFolder);
+els.extractArchivesBtn.addEventListener('click', extractArchives);
+els.emptyExtractArchivesBtn.addEventListener('click', extractArchives);
 els.rescanBtn.addEventListener('click', rescan);
 els.redoAllBtn.addEventListener('click', redoAllBooks);
 els.processAllBtn.addEventListener('click', processAllPending);
