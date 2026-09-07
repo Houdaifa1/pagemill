@@ -7,13 +7,15 @@ import {
 import { runPool } from './pool.js?v=20260901-1';
 import { chooseOutputPdfName } from './output-name.js?v=20260901-1';
 import { extractImagesFromArchives } from './archive-extractor.js?v=20260906-2';
+import { orderPagesForBook, DEFAULT_COVERS_AT_END } from './page-order.js?v=20260907-1';
 
 // Two books at a time keeps memory stable when each book contains dozens of
 // multi-megabyte scans. Higher concurrency can freeze or crash browser tabs.
 const CONCURRENCY = 2;
-// Bumped for searchable text: PDFs written by format 4 have no OCR setting
-// recorded, so they are queued for rebuild when their settings no longer match.
-const DONE_FORMAT_VERSION = 5;
+// Bumped for cover ordering: PDFs written by format 5 have no record of
+// whether their covers were taken from the end of the folder, so their page
+// order cannot be proven to match the current setting and they are rebuilt.
+const DONE_FORMAT_VERSION = 6;
 const PDFLib = window.PDFLib;
 
 // The OCR engine is imported only when searchable text is actually switched on,
@@ -47,6 +49,7 @@ const els = {
   qualitySelect: document.getElementById('quality-select'),
   squareCoverCount: document.getElementById('square-cover-count'),
   squareCoverCountHelp: document.getElementById('square-cover-count-help'),
+  coversAtEnd: document.getElementById('covers-at-end'),
   pageNumbersEnabled: document.getElementById('page-numbers-enabled'),
   pageNumberHelp: document.getElementById('page-number-help'),
   searchableTextEnabled: document.getElementById('searchable-text-enabled'),
@@ -89,6 +92,7 @@ function applyCurrentSettingsToBooks() {
   const quality = els.qualitySelect.value;
   const pageNumbersEnabled = els.pageNumbersEnabled.checked;
   const searchableTextEnabled = els.searchableTextEnabled.checked;
+  const coversAtEnd = els.coversAtEnd.checked;
 
   books.forEach((book) => {
     const marker = book.markerRecord;
@@ -98,6 +102,7 @@ function applyCurrentSettingsToBooks() {
     const matches =
       marker.imageCount === book.imageCount &&
       marker.squareCoverCount === squareCoverCount &&
+      marker.coversAtEnd === coversAtEnd &&
       marker.pageNumbersEnabled === pageNumbersEnabled &&
       marker.searchableTextEnabled === searchableTextEnabled &&
       marker.quality === quality;
@@ -192,6 +197,7 @@ function renderSummary() {
   els.rescanBtn.disabled = isBusy;
   els.qualitySelect.disabled = isBusy;
   els.squareCoverCount.disabled = isBusy;
+  els.coversAtEnd.disabled = isBusy;
   els.pageNumbersEnabled.disabled = isBusy;
   els.searchableTextEnabled.disabled = isBusy;
   els.chooseFolderBtn.disabled = isBusy;
@@ -351,7 +357,7 @@ async function rescan() {
 
 async function processOneBook(book, settings) {
   const {
-    qualityMode, squareCoverCount, pageNumbersEnabled,
+    qualityMode, squareCoverCount, coversAtEnd, pageNumbersEnabled,
     searchableTextEnabled, recognizeWords, ocrConcurrency,
   } = settings;
   const index = books.indexOf(book);
@@ -362,7 +368,14 @@ async function processOneBook(book, settings) {
 
   try {
     const pdfName = chooseOutputPdfName(book);
-    const pdfBytes = await buildBookPdf(book.imageHandles, PDFLib, {
+    // Reading order is decided once, here. Everything downstream (square cover
+    // pages, numbering, OCR skipping covers) keys off page index, so rotating
+    // the trailing covers to the front is all that is needed.
+    const orderedImages = orderPagesForBook(book.imageHandles, {
+      coversAtEnd,
+      squareCoverCount,
+    });
+    const pdfBytes = await buildBookPdf(orderedImages, PDFLib, {
       compress: qualityMode === 'compressed',
       title: book.name,
       squareCoverCount,
@@ -390,6 +403,7 @@ async function processOneBook(book, settings) {
       pdfFile: pdfName,
       quality: qualityMode,
       squareCoverCount,
+      coversAtEnd,
       pageNumbersEnabled,
       searchableTextEnabled,
       ocrLanguage: searchableTextEnabled ? DEFAULT_OCR_LANGUAGE : null,
@@ -424,6 +438,7 @@ async function processBooks(targetBooks) {
   const total = targetBooks.length;
   const qualityMode = els.qualitySelect.value;
   const squareCoverCount = normalizeSquareCoverCount();
+  const coversAtEnd = els.coversAtEnd.checked;
   const pageNumbersEnabled = els.pageNumbersEnabled.checked;
   const searchableTextEnabled = els.searchableTextEnabled.checked;
   updateProgress(0, total);
@@ -459,6 +474,7 @@ async function processBooks(targetBooks) {
       await processOneBook(book, {
         qualityMode,
         squareCoverCount,
+        coversAtEnd,
         pageNumbersEnabled,
         searchableTextEnabled,
         recognizeWords,
@@ -505,6 +521,10 @@ els.squareCoverCount.addEventListener('change', () => {
   renderAll();
 });
 els.qualitySelect.addEventListener('change', () => {
+  applyCurrentSettingsToBooks();
+  renderAll();
+});
+els.coversAtEnd.addEventListener('change', () => {
   applyCurrentSettingsToBooks();
   renderAll();
 });

@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<title>Bindery — live OCR check</title>
+<style>
+  body { font-family: ui-monospace, monospace; background: #0b0c0f; color: #e5e7eb; padding: 24px; font-size: 13px; line-height: 1.6; }
+  .pass { color: #34d399; }
+  .fail { color: #f87171; font-weight: bold; }
+  #log { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h2>Live OCR check (loads the vendored Tesseract engine exactly like the app does)</h2>
+<div id="log">Running…</div>
+<script src="../js/pdf-lib.min.js"></script>
+<script type="module" src="./ocr-live.js"></script>
+</body>
+</html>

@@ -198,6 +198,12 @@
               inputmode="numeric" aria-label="Number of square cover pages"
               class="w-12 rounded-md border border-canvas-200 dark:border-canvas-700 bg-white dark:bg-canvas-850 px-2 py-0.5 text-center font-mono text-sm font-medium text-canvas-800 dark:text-canvas-100 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20" />
           </div>
+          <label class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5"
+            title="Your cover and thumbnails are the last files in the folder. Bindery moves them to the front so the cover becomes page 1.">
+            <input id="covers-at-end" type="checkbox" class="peer sr-only" checked />
+            <span class="relative h-5 w-9 rounded-full bg-canvas-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-accent-500 peer-checked:after:translate-x-4 dark:bg-canvas-700"></span>
+            <span class="text-sm font-medium text-canvas-700 dark:text-canvas-200">Covers at end</span>
+          </label>
           <label class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
             <input id="page-numbers-enabled" type="checkbox" class="peer sr-only" />
             <span class="relative h-5 w-9 rounded-full bg-canvas-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-accent-500 peer-checked:after:translate-x-4 dark:bg-canvas-700"></span>
@@ -286,6 +292,6 @@
 
   <script src="js/pdf-lib.min.js?v=20260901-1"></script>
   <script src="js/lucide.min.js?v=20260901-1"></script>
-  <script type="module" src="js/app.js?v=20260906-2"></script>
+  <script type="module" src="js/app.js?v=20260907-1"></script>
 </body>
 </html>

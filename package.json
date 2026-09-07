@@ -1,0 +1,17 @@
+{
+  "name": "bindery",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bindery is a static, backend-free browser app. This manifest exists only so the Node QA fixtures in test/ can run the same OCR engine the browser uses; nothing here is deployed.",
+  "type": "module",
+  "scripts": {
+    "qa:archives": "node test/archive-extractor.test.mjs",
+    "qa:order": "node test/page-order.test.mjs",
+    "qa:ocr": "node test/build-ocr-fixture.mjs",
+    "qa:numbering": "node test/build-page-numbering-fixture.mjs",
+    "qa:square": "node test/build-square-cover-fixture.mjs"
+  },
+  "devDependencies": {
+    "tesseract.js": "5.1.1"
+  }
+}

@@ -1,0 +1,20 @@
+/
+  Cache-Control: no-store, max-age=0
+
+/index.html
+  Cache-Control: no-store, max-age=0
+
+/js/*
+  Cache-Control: no-store, max-age=0
+
+/css/*
+  Cache-Control: no-store, max-age=0
+
+# Vendored third-party OCR runtime (Tesseract wasm + English model). These are
+# version-pinned, self-contained assets that never mix with Bindery's own module
+# code, so a short cache is safe and avoids re-downloading ~6 MB every session.
+# They live outside /js/ on purpose: Cloudflare Pages *merges* matching _headers
+# rules instead of letting a more specific one win, so a nested path would keep
+# the no-store from /js/* and defeat the cache entirely.
+/vendor/*
+  Cache-Control: public, max-age=604800
