@@ -1,0 +1,17 @@
+# Local dependencies and generated files
+node_modules/
+dist/
+output/
+tmp/
+.wrangler/
+
+# Large, locally generated benchmark libraries
+test_library/
+test_library_large/
+test_library_2mb/
+
+# Editor and operating system files
+.DS_Store
+.env
+.env.*
+!.env.example
