@@ -72,7 +72,7 @@
   };
 </script>
 
-<link rel="stylesheet" href="css/styles.css?v=20260901-1" />
+<link rel="stylesheet" href="css/styles.css?v=20260929-2" />
 </head>
 <body class="min-h-screen bg-canvas-50 text-canvas-800 dark:bg-canvas-950 dark:text-canvas-100 font-sans antialiased selection:bg-accent-500/30">
 
@@ -167,6 +167,40 @@
     <!-- Library view (folder chosen) -->
     <section id="library-view" class="hidden flex-1 flex-col py-6">
 
+      <div class="mb-4 rounded-xl border border-canvas-200 dark:border-canvas-800 bg-white dark:bg-canvas-900 p-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="text-sm font-semibold text-canvas-900 dark:text-canvas-50">Where should the PDFs go?</h2>
+            <p id="output-location" class="mt-1 text-xs leading-relaxed text-canvas-500 dark:text-canvas-400">Beside each book's images, as usual.</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button id="reset-output-btn" type="button" class="hidden rounded-lg border border-canvas-200 dark:border-canvas-700 px-3 py-2 text-xs font-medium text-canvas-600 dark:text-canvas-300 hover:bg-canvas-100 dark:hover:bg-canvas-800">Use image folders</button>
+            <button id="choose-output-btn" type="button" class="inline-flex items-center gap-1.5 rounded-lg border border-canvas-200 dark:border-canvas-700 px-3 py-2 text-xs font-medium text-canvas-700 dark:text-canvas-200 hover:bg-canvas-100 dark:hover:bg-canvas-800">
+              <i data-lucide="folder-open" class="h-3.5 w-3.5"></i> Choose output folder
+            </button>
+          </div>
+        </div>
+        <div class="mt-4 flex flex-wrap items-start justify-between gap-3 border-t border-canvas-200 dark:border-canvas-800 pt-4">
+          <div>
+            <label class="inline-flex cursor-pointer items-center gap-2 text-sm font-medium text-canvas-800 dark:text-canvas-100">
+              <input id="preview-enabled" type="checkbox" class="peer sr-only" />
+              <span class="relative h-5 w-9 rounded-full bg-canvas-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-accent-500 peer-checked:after:translate-x-4 dark:bg-canvas-700"></span>
+              Create preview PDFs
+            </label>
+            <p class="mt-1 text-xs leading-relaxed text-canvas-500 dark:text-canvas-400">A second PDF for each book, using random interior pages. Covers are left out.</p>
+          </div>
+          <div id="preview-options" class="hidden flex-wrap items-center gap-2">
+            <label for="preview-count-mode" class="text-xs text-canvas-500 dark:text-canvas-400">Preview pages</label>
+            <select id="preview-count-mode" class="rounded-lg border border-canvas-200 dark:border-canvas-700 bg-white dark:bg-canvas-850 px-2.5 py-2 text-xs font-medium text-canvas-700 dark:text-canvas-200">
+              <option value="auto">Automatic (about 10%)</option>
+              <option value="manual">Choose a number</option>
+            </select>
+            <input id="preview-page-count" type="number" min="1" step="1" value="3" inputmode="numeric" aria-label="Number of preview pages"
+              class="hidden w-16 rounded-lg border border-canvas-200 dark:border-canvas-700 bg-white dark:bg-canvas-850 px-2 py-2 text-center text-xs text-canvas-700 dark:text-canvas-200" />
+          </div>
+        </div>
+      </div>
+
       <!-- Toolbar -->
       <div class="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div class="flex items-center gap-4">
@@ -181,6 +215,30 @@
         </div>
 
         <div class="flex flex-wrap items-center justify-end gap-2">
+          <button id="rescan-btn" type="button"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-transparent px-3 py-2 text-sm font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800">
+            <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i>
+            <span>Rescan</span>
+          </button>
+          <button id="redo-all-btn" type="button" disabled
+            class="inline-flex items-center gap-1.5 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-transparent px-3 py-2 text-sm font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800 disabled:cursor-not-allowed disabled:opacity-40">
+            <i data-lucide="rotate-ccw" class="h-3.5 w-3.5"></i>
+            <span>Redo All PDFs</span>
+          </button>
+          <button id="process-all-btn" type="button"
+            class="inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2 text-sm font-medium text-white shadow-soft transition-all duration-150 hover:bg-accent-600 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-accent-500">
+            <i data-lucide="play" class="h-4 w-4"></i>
+            <span>Process All Pending</span>
+          </button>
+        </div>
+      </div>
+
+      <details id="pdf-settings" class="settings-panel mb-4 w-full rounded-xl border border-canvas-200 dark:border-canvas-800 bg-white dark:bg-canvas-900">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-canvas-700 dark:text-canvas-200">
+          <span class="flex items-center gap-2"><i data-lucide="settings-2" class="h-4 w-4 text-canvas-400"></i> PDF settings <span id="settings-summary" class="font-normal text-canvas-500 dark:text-canvas-400">Original quality · 3 covers · covers at end</span></span>
+          <i data-lucide="chevron-down" class="settings-chevron h-4 w-4 shrink-0 text-canvas-400"></i>
+        </summary>
+        <div class="flex flex-wrap items-center gap-2 border-t border-canvas-200 dark:border-canvas-800 px-4 py-3">
           <label for="quality-select" class="sr-only">PDF quality</label>
           <div class="flex items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
             <i data-lucide="settings-2" class="h-3.5 w-3.5 text-canvas-400"></i>
@@ -214,29 +272,13 @@
             <span class="relative h-5 w-9 rounded-full bg-canvas-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-accent-500 peer-checked:after:translate-x-4 dark:bg-canvas-700"></span>
             <span class="text-sm font-medium text-canvas-700 dark:text-canvas-200">Searchable text (OCR)</span>
           </label>
-          <button id="rescan-btn" type="button"
-            class="inline-flex items-center gap-1.5 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-transparent px-3 py-2 text-sm font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800">
-            <i data-lucide="refresh-cw" class="h-3.5 w-3.5"></i>
-            <span>Rescan</span>
-          </button>
-          <button id="redo-all-btn" type="button" disabled
-            class="inline-flex items-center gap-1.5 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-transparent px-3 py-2 text-sm font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800 disabled:cursor-not-allowed disabled:opacity-40">
-            <i data-lucide="rotate-ccw" class="h-3.5 w-3.5"></i>
-            <span>Redo All PDFs</span>
-          </button>
-          <button id="process-all-btn" type="button"
-            class="inline-flex items-center gap-2 rounded-lg bg-accent-500 px-4 py-2 text-sm font-medium text-white shadow-soft transition-all duration-150 hover:bg-accent-600 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-accent-500">
-            <i data-lucide="play" class="h-4 w-4"></i>
-            <span>Process All Pending</span>
-          </button>
         </div>
-      </div>
-
-      <p id="quality-help" class="mb-4 text-xs text-canvas-500 dark:text-canvas-400">
-        The first <span id="square-cover-count-help">3</span> page(s) use true 8.5 &times; 8.5-inch square pages (2550 &times; 2550 px at 300 PPI); all remaining pages use 8.5 &times; 11-inch US Letter (2550 &times; 3300 px). Images are fitted without stretching or cropping.
-        <span id="page-number-help">Page numbering is off by default. When enabled, a bold number badge is added without resizing, moving, cropping, or re-encoding the page image.</span>
-        <span id="searchable-text-help">Searchable text (OCR) is off for maximum speed, producing an image-only PDF. When enabled, page images stay byte-for-byte unchanged and an invisible text layer is added over the interior pages so readers can select, copy, and search the words. OCR runs entirely on this computer and takes noticeably longer than normal PDF generation.</span>
-      </p>
+        <p id="quality-help" class="px-4 pb-3 text-xs leading-relaxed text-canvas-500 dark:text-canvas-400">
+          The first <span id="square-cover-count-help">3</span> page(s) use true 8.5 &times; 8.5-inch square pages (2550 &times; 2550 px at 300 PPI); all remaining pages use 8.5 &times; 11-inch US Letter (2550 &times; 3300 px). Images are fitted without stretching or cropping.
+          <span id="page-number-help">Page numbering is off by default. When enabled, a bold number badge is added without resizing, moving, cropping, or re-encoding the page image.</span>
+          <span id="searchable-text-help">Searchable text (OCR) is off for maximum speed, producing an image-only PDF. When enabled, page images stay byte-for-byte unchanged and an invisible text layer is added over the interior pages so readers can select, copy, and search the words. OCR runs entirely on this computer and takes noticeably longer than normal PDF generation.</span>
+        </p>
+      </details>
 
       <!-- Progress bar (visible while processing) -->
       <div id="progress-wrap" class="hidden mb-5 rounded-xl border border-canvas-200 dark:border-canvas-800 bg-canvas-100/50 dark:bg-canvas-900 px-4 py-3.5 animate-fade-up">
@@ -259,7 +301,7 @@
           <span>Book</span>
           <span class="text-right">Pages</span>
           <span class="w-24 text-center">Status</span>
-          <span class="w-40 text-right">Actions</span>
+          <span class="w-24 text-right">Actions</span>
         </div>
         <div id="book-list" class="divide-y divide-canvas-200 dark:divide-canvas-800"></div>
       </div>
@@ -276,15 +318,10 @@
       </div>
       <span class="book-pages text-right font-mono text-sm text-canvas-500 dark:text-canvas-400"></span>
       <span class="status-pill-wrap w-24 flex justify-center"></span>
-      <div class="flex w-40 items-center justify-end gap-1.5">
+      <div class="flex w-24 items-center justify-end gap-1.5">
         <button type="button" class="rebuild-btn hidden inline-flex items-center gap-1.5 rounded-md border border-canvas-200 dark:border-canvas-800 px-2.5 py-1.5 text-xs font-medium text-canvas-600 dark:text-canvas-300 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800">
           <i data-lucide="rotate-ccw" class="h-3.5 w-3.5"></i>
           Redo PDF
-        </button>
-        <button type="button" disabled title="Coming soon"
-          class="check-pdf-btn inline-flex items-center gap-1.5 rounded-md border border-canvas-200 dark:border-canvas-800 px-2.5 py-1.5 text-xs font-medium text-canvas-400 dark:text-canvas-500 cursor-not-allowed opacity-60">
-          <i data-lucide="badge-check" class="h-3.5 w-3.5"></i>
-          Check PDF
         </button>
       </div>
     </div>
@@ -292,6 +329,6 @@
 
   <script src="js/pdf-lib.min.js?v=20260901-1"></script>
   <script src="js/lucide.min.js?v=20260901-1"></script>
-  <script type="module" src="js/app.js?v=20260907-1"></script>
+  <script type="module" src="js/app.js?v=20260929-2"></script>
 </body>
 </html>

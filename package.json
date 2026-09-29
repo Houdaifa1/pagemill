@@ -6,9 +6,10 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "npm run qa:archives && npm run qa:order",
+    "test": "npm run qa:archives && npm run qa:order && npm run qa:output",
     "qa:archives": "node test/archive-extractor.test.mjs",
     "qa:order": "node test/page-order.test.mjs",
+    "qa:output": "node test/output-preview.test.mjs",
     "qa:ocr": "node test/build-ocr-fixture.mjs",
     "qa:numbering": "node test/build-page-numbering-fixture.mjs",
     "qa:square": "node test/build-square-cover-fixture.mjs"

@@ -2,9 +2,9 @@ import { naturalCompare } from './natural-sort.js?v=20260901-1';
 
 const IMAGE_EXT = /\.(png|jpe?g)$/i;
 const PDF_EXT = /\.pdf$/i;
-// Markers older than this predate the searchable-text setting and cannot prove
-// whether their PDF matches the current settings, so they are rebuilt.
-const DONE_FORMAT_VERSION = 5;
+// Version 6 records cover order, which is needed to tell whether a saved PDF
+// still matches the selected settings.
+export const DONE_FORMAT_VERSION = 6;
 
 // Recursively scans every subfolder of `rootHandle`. Each folder containing
 // at least one directly-nested image is one "book". Keeping a book's images
@@ -48,6 +48,7 @@ export async function scanBooks(rootHandle) {
             Number(marker.formatVersion) >= DONE_FORMAT_VERSION &&
             Number.isInteger(marker.squareCoverCount) &&
             marker.squareCoverCount >= 0 &&
+            typeof marker.coversAtEnd === 'boolean' &&
             typeof marker.pageNumbersEnabled === 'boolean' &&
             typeof marker.searchableTextEnabled === 'boolean';
         } catch {
@@ -59,6 +60,9 @@ export async function scanBooks(rootHandle) {
       books.push({
         name: pathParts[pathParts.length - 1],
         relativePath: pathParts.join(' / '),
+        outputPathParts: isSelectedRoot
+          ? [rootHandle.name || 'Selected Folder']
+          : [rootHandle.name || 'Selected Folder', ...pathParts],
         dirHandle: handle,
         imageHandles,
         imageCount: imageHandles.length,

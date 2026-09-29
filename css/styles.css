@@ -97,3 +97,21 @@ html {
 .book-row {
   animation-fill-mode: backwards;
 }
+
+.settings-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-chevron {
+  transition: transform 160ms ease;
+}
+
+.settings-panel[open] .settings-chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-chevron {
+    transition: none;
+  }
+}

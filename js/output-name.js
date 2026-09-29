@@ -16,3 +16,19 @@ export function chooseOutputPdfName(book) {
   }
   return candidate;
 }
+
+export function choosePreviewPdfName(pdfName, pdfNames, ownedName = null) {
+  if (typeof ownedName === 'string' && /\.pdf$/i.test(ownedName) &&
+      !/[\\/]/.test(ownedName) && ownedName.toLowerCase() !== pdfName.toLowerCase()) {
+    return ownedName;
+  }
+  const existing = new Set(pdfNames.map((name) => name.toLowerCase()));
+  const base = pdfName.replace(/\.pdf$/i, '') + ' - Preview';
+  let candidate = `${base}.pdf`;
+  let suffix = 2;
+  while (existing.has(candidate.toLowerCase())) {
+    candidate = `${base} ${suffix}.pdf`;
+    suffix += 1;
+  }
+  return candidate;
+}
