@@ -125,6 +125,12 @@ html {
   overflow-wrap: anywhere;
 }
 
+#square-cover-setting:has(input:disabled),
+#covers-at-end-setting:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-chevron {
     transition: none;

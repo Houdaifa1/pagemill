@@ -52,12 +52,19 @@ const skipped = prepareBookPages(orderedNames, {
   coversAtEnd: true, squareCoverCount: 3, excludeFirstPages: true, excludedPageCount: 4,
 });
 assert.deepEqual(skipped.images.map((image) => image.name),
-  ['page-02.png', 'page-03.png', 'page-04.png', 'page-05.png']);
+  ['page-05.png', 'cover.png', 'thumb-1.png', 'thumb-2.png']);
 assert.equal(skipped.coverCount, 0);
 assert.deepEqual(selectPreviewPageIndexes(skipped.images.length, skipped.coverCount, 3, () => 0), [0, 1, 2]);
 assert.equal(prepareBookPages(orderedNames, {
   coversAtEnd: true, squareCoverCount: 3, excludeFirstPages: true, excludedPageCount: 2,
-}).coverCount, 1);
+}).coverCount, 0);
+const templateBook = [
+  'template-1.png', 'template-2.png', 'template-3.png', 'template-4.png',
+  'page-1.png', 'page-2.png',
+].map((name) => ({ name }));
+assert.deepEqual(prepareBookPages(templateBook, {
+  coversAtEnd: true, squareCoverCount: 3, excludeFirstPages: true, excludedPageCount: 4,
+}).images.map((image) => image.name), ['page-1.png', 'page-2.png']);
 assert.throws(() => prepareBookPages(orderedNames, {
   coversAtEnd: true, squareCoverCount: 3, excludeFirstPages: true, excludedPageCount: 8,
 }), /No pages remain/);

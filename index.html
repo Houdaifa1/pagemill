@@ -72,7 +72,7 @@
   };
 </script>
 
-<link rel="stylesheet" href="css/styles.css?v=20260930-1" />
+<link rel="stylesheet" href="css/styles.css?v=20260930-2" />
 </head>
 <body class="min-h-screen bg-canvas-50 text-canvas-800 dark:bg-canvas-950 dark:text-canvas-100 font-sans antialiased selection:bg-accent-500/30">
 
@@ -272,14 +272,14 @@
             </select>
           </div>
           <label for="square-cover-count" class="sr-only">Number of square cover pages</label>
-          <div class="flex items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
+          <div id="square-cover-setting" class="flex items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
             <i data-lucide="square-stack" class="h-3.5 w-3.5 text-canvas-400"></i>
             <span class="text-sm font-medium text-canvas-700 dark:text-canvas-200">Square covers</span>
             <input id="square-cover-count" type="number" min="0" step="1" value="3"
               inputmode="numeric" aria-label="Number of square cover pages"
               class="w-12 rounded-md border border-canvas-200 dark:border-canvas-700 bg-white dark:bg-canvas-850 px-2 py-0.5 text-center font-mono text-sm font-medium text-canvas-800 dark:text-canvas-100 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-500/20" />
           </div>
-          <label class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5"
+          <label id="covers-at-end-setting" class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5"
             title="Your cover and thumbnails are the last files in the folder. Bindery moves them to the front so the cover becomes page 1.">
             <input id="covers-at-end" type="checkbox" class="peer sr-only" checked />
             <span class="relative h-5 w-9 rounded-full bg-canvas-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-accent-500 peer-checked:after:translate-x-4 dark:bg-canvas-700"></span>
@@ -295,28 +295,19 @@
             <span class="relative h-5 w-9 rounded-full bg-canvas-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-accent-500 peer-checked:after:translate-x-4 dark:bg-canvas-700"></span>
             <span class="text-sm font-medium text-canvas-700 dark:text-canvas-200">Searchable text (OCR)</span>
           </label>
-          <div class="mt-1 w-full border-t border-canvas-200 dark:border-canvas-800 pt-3">
-            <label class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
+          <div class="inline-flex max-w-full flex-wrap items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-canvas-100/60 dark:bg-canvas-900 px-2.5 py-1.5">
+            <label class="inline-flex cursor-pointer items-center gap-2">
               <input id="exclude-first-pages" type="checkbox" class="peer sr-only" />
               <span class="relative h-5 w-9 rounded-full bg-canvas-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-accent-500 peer-checked:after:translate-x-4 dark:bg-canvas-700"></span>
               <span class="text-sm font-medium text-canvas-700 dark:text-canvas-200">Skip first pages</span>
             </label>
-            <div id="exclude-pages-options" class="hidden mt-2 flex-wrap items-center gap-2 text-xs text-canvas-500 dark:text-canvas-400">
-              <span class="rounded-md bg-canvas-200/70 dark:bg-canvas-800 px-2 py-1 line-through">1–<span id="excluded-page-count-visual">4</span></span>
-              <span aria-hidden="true">→</span>
-              <span class="rounded-md bg-accent-500/10 px-2 py-1 font-medium text-accent-600 dark:text-accent-300">PDF starts at <span id="first-included-page">5</span></span>
-              <label for="excluded-page-count" class="ml-1">Pages to skip</label>
+            <div id="exclude-pages-options" class="hidden items-center gap-2 border-l border-canvas-200 dark:border-canvas-700 pl-2 text-xs">
               <input id="excluded-page-count" type="number" min="1" step="1" value="4" inputmode="numeric" aria-label="Number of starting pages to skip"
-                class="w-16 rounded-lg border border-canvas-200 dark:border-canvas-700 bg-white dark:bg-canvas-850 px-2 py-1.5 text-center font-mono text-xs text-canvas-700 dark:text-canvas-200" />
+                class="w-12 rounded-md border border-canvas-200 dark:border-canvas-700 bg-white dark:bg-canvas-850 px-1 py-0.5 text-center font-mono text-sm text-canvas-700 dark:text-canvas-200" />
+              <span class="whitespace-nowrap text-canvas-500 dark:text-canvas-400">PDF starts at <span id="first-included-page">5</span></span>
             </div>
-            <p id="exclude-pages-help" class="mt-1 text-xs text-canvas-500 dark:text-canvas-400">Pages are skipped after cover ordering. Source images stay untouched.</p>
           </div>
         </div>
-        <p id="quality-help" class="px-4 pb-3 text-xs leading-relaxed text-canvas-500 dark:text-canvas-400">
-          The first <span id="square-cover-count-help">3</span> page(s) use true 8.5 &times; 8.5-inch square pages (2550 &times; 2550 px at 300 PPI); all remaining pages use 8.5 &times; 11-inch US Letter (2550 &times; 3300 px). Images are fitted without stretching or cropping.
-          <span id="page-number-help">Page numbering is off by default. When enabled, a bold number badge is added without resizing, moving, cropping, or re-encoding the page image.</span>
-          <span id="searchable-text-help">Searchable text (OCR) is off for maximum speed, producing an image-only PDF. When enabled, page images stay byte-for-byte unchanged and an invisible text layer is added over the interior pages so readers can select, copy, and search the words. OCR runs entirely on this computer and takes noticeably longer than normal PDF generation.</span>
-        </p>
       </details>
 
       <!-- Progress bar (visible while processing) -->
@@ -368,6 +359,6 @@
 
   <script src="js/pdf-lib.min.js?v=20260901-1"></script>
   <script src="js/lucide.min.js?v=20260901-1"></script>
-  <script type="module" src="js/app.js?v=20260930-1"></script>
+  <script type="module" src="js/app.js?v=20260930-2"></script>
 </body>
 </html>

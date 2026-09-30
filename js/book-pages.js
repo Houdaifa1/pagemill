@@ -1,14 +1,17 @@
 import { orderPagesForBook } from './page-order.js?v=20260907-1';
 
-// Cover ordering happens first. Removing pages then updates the number of
-// covers that remain, so OCR, page numbering, layout, and previews agree.
+// Skip mode uses the folder's image order. It has no cover pages, so page
+// layout, OCR, numbering, and preview selection all start from the same page.
 export function prepareBookPages(imageHandles, {
   coversAtEnd,
   squareCoverCount,
   excludeFirstPages = false,
   excludedPageCount = 4,
 }) {
-  const ordered = orderPagesForBook(imageHandles, { coversAtEnd, squareCoverCount });
+  const ordered = orderPagesForBook(imageHandles, {
+    coversAtEnd: excludeFirstPages ? false : coversAtEnd,
+    squareCoverCount: excludeFirstPages ? 0 : squareCoverCount,
+  });
   const removed = excludeFirstPages
     ? Math.max(0, Math.floor(Number(excludedPageCount) || 0))
     : 0;
@@ -17,7 +20,7 @@ export function prepareBookPages(imageHandles, {
   }
   return {
     images: ordered.slice(removed),
-    coverCount: Math.max(0, squareCoverCount - removed),
+    coverCount: excludeFirstPages ? 0 : squareCoverCount,
     removed,
   };
 }

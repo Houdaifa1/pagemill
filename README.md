@@ -34,9 +34,10 @@ choose your own count instead. Every preview page carries three large, aligned
 `PREVIEW` watermarks. Previews sit beside their full PDFs in either layout.
 
 PDF settings also include an optional **Skip first pages** control, off by
-default and set to four pages when enabled. It removes pages after cover
-ordering, without changing the source images. If too few pages remain for a
-book, Bindery reports that book as an error instead of making an empty PDF.
+default and set to four pages when enabled. It turns off cover handling and
+removes the first images in folder order without changing the source files.
+Turning it off restores the previous cover settings. If too few pages remain
+for a book, Bindery reports that book as an error instead of making an empty PDF.
 
 Firefox and Safari cannot grant the folder access this app needs. Use a recent
 Chromium browser.

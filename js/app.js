@@ -6,7 +6,7 @@ import {
 } from './pdf-builder.js?v=20260902-2';
 import { runPool } from './pool.js?v=20260901-1';
 import { extractImagesFromArchives } from './archive-extractor.js?v=20260906-2';
-import { prepareBookPages } from './book-pages.js?v=20260930-1';
+import { prepareBookPages } from './book-pages.js?v=20260930-2';
 import {
   OUTPUT_LAYOUT_FLAT,
   OUTPUT_LAYOUT_FOLDERS,
@@ -51,12 +51,9 @@ const els = {
   settingsSummary: document.getElementById('settings-summary'),
   qualitySelect: document.getElementById('quality-select'),
   squareCoverCount: document.getElementById('square-cover-count'),
-  squareCoverCountHelp: document.getElementById('square-cover-count-help'),
   coversAtEnd: document.getElementById('covers-at-end'),
   pageNumbersEnabled: document.getElementById('page-numbers-enabled'),
-  pageNumberHelp: document.getElementById('page-number-help'),
   searchableTextEnabled: document.getElementById('searchable-text-enabled'),
-  searchableTextHelp: document.getElementById('searchable-text-help'),
   chooseOutputBtn: document.getElementById('choose-output-btn'),
   chooseOutputLabel: document.getElementById('choose-output-label'),
   resetOutputBtn: document.getElementById('reset-output-btn'),
@@ -73,7 +70,6 @@ const els = {
   excludeFirstPages: document.getElementById('exclude-first-pages'),
   excludePagesOptions: document.getElementById('exclude-pages-options'),
   excludedPageCount: document.getElementById('excluded-page-count'),
-  excludedPageCountVisual: document.getElementById('excluded-page-count-visual'),
   firstIncludedPage: document.getElementById('first-included-page'),
   folderPath: document.getElementById('folder-path'),
   folderPathName: document.getElementById('folder-path-name'),
@@ -96,6 +92,7 @@ let rootHandle = null;
 let customOutputHandle = null;
 let isProcessing = false;
 let isExtracting = false;
+let coverSettingsBeforeSkip = null;
 
 function readSquareCoverCount() {
   const parsed = Number.parseInt(els.squareCoverCount.value, 10);
@@ -105,8 +102,22 @@ function readSquareCoverCount() {
 function normalizeSquareCoverCount() {
   const count = readSquareCoverCount();
   els.squareCoverCount.value = String(count);
-  els.squareCoverCountHelp.textContent = String(count);
   return count;
+}
+
+function syncCoverSettingsWithSkip() {
+  if (els.excludeFirstPages.checked) {
+    coverSettingsBeforeSkip ||= {
+      coversAtEnd: els.coversAtEnd.checked,
+      squareCoverCount: normalizeSquareCoverCount(),
+    };
+    els.coversAtEnd.checked = false;
+    els.squareCoverCount.value = '0';
+  } else if (coverSettingsBeforeSkip) {
+    els.coversAtEnd.checked = coverSettingsBeforeSkip.coversAtEnd;
+    els.squareCoverCount.value = String(coverSettingsBeforeSkip.squareCoverCount);
+    coverSettingsBeforeSkip = null;
+  }
 }
 
 function normalizePreviewPageCount() {
@@ -199,16 +210,14 @@ function renderOutputSettings() {
   els.excludePagesOptions.classList.toggle('hidden', !els.excludeFirstPages.checked);
   els.excludePagesOptions.classList.toggle('flex', els.excludeFirstPages.checked);
   const excludedCount = normalizeExcludedPageCount();
-  els.excludedPageCountVisual.textContent = String(excludedCount);
   els.firstIncludedPage.textContent = String(excludedCount + 1);
 }
 
 function updateSettingsSummary() {
-  const parts = [
-    els.qualitySelect.value === 'original' ? 'Original quality' : 'Compressed',
-    `${readSquareCoverCount()} covers`,
-    els.coversAtEnd.checked ? 'covers at end' : 'folder order',
-  ];
+  const parts = [els.qualitySelect.value === 'original' ? 'Original quality' : 'Compressed'];
+  if (!els.excludeFirstPages.checked) {
+    parts.push(`${readSquareCoverCount()} covers`, els.coversAtEnd.checked ? 'covers at end' : 'folder order');
+  }
   if (els.pageNumbersEnabled.checked) parts.push('page numbers');
   if (els.searchableTextEnabled.checked) parts.push('OCR');
   if (els.excludeFirstPages.checked) parts.push(`skip ${normalizeExcludedPageCount()} pages`);
@@ -216,16 +225,16 @@ function updateSettingsSummary() {
 }
 
 function applyCurrentSettingsToBooks() {
-  const squareCoverCount = readSquareCoverCount();
+  const excludeFirstPages = els.excludeFirstPages.checked;
+  const squareCoverCount = excludeFirstPages ? 0 : readSquareCoverCount();
   const quality = els.qualitySelect.value;
   const pageNumbersEnabled = els.pageNumbersEnabled.checked;
   const searchableTextEnabled = els.searchableTextEnabled.checked;
-  const coversAtEnd = els.coversAtEnd.checked;
+  const coversAtEnd = excludeFirstPages ? false : els.coversAtEnd.checked;
   const previewEnabled = els.previewEnabled.checked;
   const previewMode = els.previewCountMode.value;
   const previewManualCount = normalizePreviewPageCount();
   const outputLayout = currentOutputLayout();
-  const excludeFirstPages = els.excludeFirstPages.checked;
   const excludedPageCount = normalizeExcludedPageCount();
 
   books.forEach((book) => {
@@ -360,8 +369,8 @@ function renderSummary() {
   els.redoAllBtn.disabled = isBusy || books.length === 0;
   els.rescanBtn.disabled = isBusy;
   els.qualitySelect.disabled = isBusy;
-  els.squareCoverCount.disabled = isBusy;
-  els.coversAtEnd.disabled = isBusy;
+  els.squareCoverCount.disabled = isBusy || els.excludeFirstPages.checked;
+  els.coversAtEnd.disabled = isBusy || els.excludeFirstPages.checked;
   els.pageNumbersEnabled.disabled = isBusy;
   els.searchableTextEnabled.disabled = isBusy;
   els.chooseFolderBtn.disabled = isBusy;
@@ -723,8 +732,9 @@ async function processBooks(targetBooks) {
   let completed = 0;
   const total = targetBooks.length;
   const qualityMode = els.qualitySelect.value;
-  const squareCoverCount = normalizeSquareCoverCount();
-  const coversAtEnd = els.coversAtEnd.checked;
+  const excludeFirstPages = els.excludeFirstPages.checked;
+  const squareCoverCount = excludeFirstPages ? 0 : normalizeSquareCoverCount();
+  const coversAtEnd = excludeFirstPages ? false : els.coversAtEnd.checked;
   const pageNumbersEnabled = els.pageNumbersEnabled.checked;
   const searchableTextEnabled = els.searchableTextEnabled.checked;
   const outputHandle = customOutputHandle;
@@ -732,7 +742,6 @@ async function processBooks(targetBooks) {
   const previewEnabled = els.previewEnabled.checked;
   const previewMode = els.previewCountMode.value;
   const previewManualCount = normalizePreviewPageCount();
-  const excludeFirstPages = els.excludeFirstPages.checked;
   const excludedPageCount = normalizeExcludedPageCount();
   const reserveOutputNames = createOutputNameAllocator();
   updateProgress(0, total);
@@ -830,25 +839,19 @@ els.previewPageCount.addEventListener('change', () => {
   renderAll();
 });
 els.excludeFirstPages.addEventListener('change', () => {
+  syncCoverSettingsWithSkip();
   applyCurrentSettingsToBooks();
   renderAll();
 });
 els.excludedPageCount.addEventListener('input', () => {
   const parsed = Number.parseInt(els.excludedPageCount.value, 10);
   if (Number.isFinite(parsed) && parsed > 0) {
-    els.excludedPageCountVisual.textContent = String(parsed);
     els.firstIncludedPage.textContent = String(parsed + 1);
   }
 });
 els.excludedPageCount.addEventListener('change', () => {
   applyCurrentSettingsToBooks();
   renderAll();
-});
-els.squareCoverCount.addEventListener('input', () => {
-  const parsed = Number.parseInt(els.squareCoverCount.value, 10);
-  if (Number.isFinite(parsed) && parsed >= 0) {
-    els.squareCoverCountHelp.textContent = String(parsed);
-  }
 });
 els.squareCoverCount.addEventListener('change', normalizeSquareCoverCount);
 els.squareCoverCount.addEventListener('change', () => {
@@ -864,21 +867,16 @@ els.coversAtEnd.addEventListener('change', () => {
   renderAll();
 });
 els.pageNumbersEnabled.addEventListener('change', () => {
-  els.pageNumberHelp.textContent = els.pageNumbersEnabled.checked
-    ? 'Numbering starts at 1 after the covers. The bold badge is a separate PDF layer; page images keep their original geometry and bytes.'
-    : 'Page numbering is off. Page images use their original geometry with no numbering layer.';
   applyCurrentSettingsToBooks();
   renderAll();
 });
 els.searchableTextEnabled.addEventListener('change', () => {
-  els.searchableTextHelp.textContent = els.searchableTextEnabled.checked
-    ? 'Searchable text is on. Interior pages are read on this computer and an invisible text layer is added over the untouched page image, so the words can be selected, copied, and searched. Covers are skipped. Building takes noticeably longer than an image-only PDF.'
-    : 'Searchable text (OCR) is off for maximum speed, producing an image-only PDF. Turn it on to add an invisible selectable/searchable text layer without changing the page images.';
   applyCurrentSettingsToBooks();
   renderAll();
 });
 
 if (checkBrowserSupport()) {
+  syncCoverSettingsWithSkip();
   normalizeSquareCoverCount();
   normalizePreviewPageCount();
   normalizeExcludedPageCount();
