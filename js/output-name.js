@@ -17,9 +17,26 @@ export function chooseOutputPdfName(book) {
   return candidate;
 }
 
+// In a shared result folder, unrelated PDFs should not change every book's
+// name. Only a name collision adds a number.
+export function chooseFlatOutputPdfName(bookName, pdfNames) {
+  const existing = new Set([...pdfNames].map((name) => name.toLowerCase()));
+  let candidate = `${bookName}.pdf`;
+  let suffix = 2;
+  while (existing.has(candidate.toLowerCase())) {
+    candidate = `${bookName} - ${suffix}.pdf`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+export function isSafePdfName(name) {
+  return typeof name === 'string' && name.length > 4 &&
+    /\.pdf$/i.test(name) && !/[\\/]/.test(name);
+}
+
 export function choosePreviewPdfName(pdfName, pdfNames, ownedName = null) {
-  if (typeof ownedName === 'string' && /\.pdf$/i.test(ownedName) &&
-      !/[\\/]/.test(ownedName) && ownedName.toLowerCase() !== pdfName.toLowerCase()) {
+  if (isSafePdfName(ownedName) && ownedName.toLowerCase() !== pdfName.toLowerCase()) {
     return ownedName;
   }
   const existing = new Set(pdfNames.map((name) => name.toLowerCase()));

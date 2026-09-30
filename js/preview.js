@@ -25,6 +25,22 @@ export async function buildPreviewPdf(fullPdfBytes, pageIndexes, PDFLib) {
   const fullPdf = await PDFLib.PDFDocument.load(fullPdfBytes);
   const preview = await PDFLib.PDFDocument.create();
   const pages = await preview.copyPages(fullPdf, pageIndexes);
-  pages.forEach((page) => preview.addPage(page));
+  const font = await preview.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  for (const page of pages) {
+    preview.addPage(page);
+    const { width, height } = page.getSize();
+    const scale = Math.min(width / 612, height / 792);
+    for (const y of [15, 235, 455]) {
+      page.drawText('PREVIEW', {
+        x: (width / 612) * 80,
+        y: (height / 792) * y,
+        size: 98 * scale,
+        font,
+        color: PDFLib.rgb(0.13, 0.18, 0.28),
+        opacity: 0.24,
+        rotate: PDFLib.degrees(32),
+      });
+    }
+  }
   return preview.save();
 }

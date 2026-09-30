@@ -21,12 +21,22 @@ searchable with local OCR. Bindery remembers finished books with a `.done` file
 and lets you redo one book or the whole library. ZIP and TAR archives can be
 extracted before building PDFs.
 
-The output choice appears after you select a library. Choosing another folder
-creates the same book-folder structure there, under a folder named after the
-selected library. Preview PDFs are optional. Each preview uses random interior
-pages from the finished PDF, skipping the configured cover pages. The automatic
-count is about 10% of interior pages, with a minimum of three; you can choose
-your own count instead. Previews are named `Book - Preview.pdf` beside their full PDFs.
+The output choice appears after you select a library. Without another output
+folder, each PDF stays beside its images. With one, the default puts all PDFs
+in that folder; you can instead keep the selected library's folder structure.
+The page shows examples using a few of the books it found. Existing PDFs are
+protected from name collisions.
+
+Preview PDFs are optional. Each preview uses random interior pages from the
+finished PDF, skipping any covers still included. The automatic count is about
+10% of interior pages, with a minimum of three when enough pages exist; you can
+choose your own count instead. Every preview page carries three large, aligned
+`PREVIEW` watermarks. Previews sit beside their full PDFs in either layout.
+
+PDF settings also include an optional **Skip first pages** control, off by
+default and set to four pages when enabled. It removes pages after cover
+ordering, without changing the source images. If too few pages remain for a
+book, Bindery reports that book as an error instead of making an empty PDF.
 
 Firefox and Safari cannot grant the folder access this app needs. Use a recent
 Chromium browser.
@@ -64,7 +74,7 @@ npm test
 npm run build
 ```
 
-`npm test` checks page ordering, archive extraction, output paths, and previews. For the browser checks,
+`npm test` checks page ordering, archive extraction, output paths, skipped pages, and previews. For the browser checks,
 visit `/test/test.html` on your local server. Optional PDF fixtures live in
 `test/build-*.mjs`; the OCR and page-numbering fixtures need
 `BINDERY_QA_BOOK` set to a local folder of page images. Generated PDFs and test

@@ -5,11 +5,15 @@ import {
   DEFAULT_SQUARE_COVER_COUNT,
 } from './pdf-builder.js?v=20260902-2';
 import { runPool } from './pool.js?v=20260901-1';
-import { chooseOutputPdfName, choosePreviewPdfName } from './output-name.js?v=20260929-2';
 import { extractImagesFromArchives } from './archive-extractor.js?v=20260906-2';
-import { orderPagesForBook, DEFAULT_COVERS_AT_END } from './page-order.js?v=20260907-1';
-import { resolveOutputDirectory, listPdfNames } from './output-location.js?v=20260929-2';
-import { selectPreviewPageIndexes, buildPreviewPdf } from './preview.js?v=20260929-2';
+import { prepareBookPages } from './book-pages.js?v=20260930-1';
+import {
+  OUTPUT_LAYOUT_FLAT,
+  OUTPUT_LAYOUT_FOLDERS,
+  resolveOutputDirectory,
+  createOutputNameAllocator,
+} from './output-location.js?v=20260930-1';
+import { selectPreviewPageIndexes, buildPreviewPdf } from './preview.js?v=20260930-1';
 
 // Two books at a time keeps memory stable when each book contains dozens of
 // multi-megabyte scans. Higher concurrency can freeze or crash browser tabs.
@@ -54,12 +58,23 @@ const els = {
   searchableTextEnabled: document.getElementById('searchable-text-enabled'),
   searchableTextHelp: document.getElementById('searchable-text-help'),
   chooseOutputBtn: document.getElementById('choose-output-btn'),
+  chooseOutputLabel: document.getElementById('choose-output-label'),
   resetOutputBtn: document.getElementById('reset-output-btn'),
   outputLocation: document.getElementById('output-location'),
+  outputLayoutOptions: document.getElementById('output-layout-options'),
+  outputLayoutInputs: [...document.querySelectorAll('input[name="output-layout"]')],
+  flatLayoutExample: document.getElementById('flat-layout-example'),
+  foldersLayoutExample: document.getElementById('folders-layout-example'),
+  outputExampleNote: document.getElementById('output-example-note'),
   previewEnabled: document.getElementById('preview-enabled'),
   previewOptions: document.getElementById('preview-options'),
   previewCountMode: document.getElementById('preview-count-mode'),
   previewPageCount: document.getElementById('preview-page-count'),
+  excludeFirstPages: document.getElementById('exclude-first-pages'),
+  excludePagesOptions: document.getElementById('exclude-pages-options'),
+  excludedPageCount: document.getElementById('excluded-page-count'),
+  excludedPageCountVisual: document.getElementById('excluded-page-count-visual'),
+  firstIncludedPage: document.getElementById('first-included-page'),
   folderPath: document.getElementById('folder-path'),
   folderPathName: document.getElementById('folder-path-name'),
   bookCount: document.getElementById('book-count'),
@@ -101,14 +116,91 @@ function normalizePreviewPageCount() {
   return count;
 }
 
+function normalizeExcludedPageCount() {
+  const parsed = Number.parseInt(els.excludedPageCount.value, 10);
+  const count = Number.isFinite(parsed) && parsed > 0 ? parsed : 4;
+  els.excludedPageCount.value = String(count);
+  return count;
+}
+
+function currentOutputLayout() {
+  return els.outputLayoutInputs.find((input) => input.checked)?.value || OUTPUT_LAYOUT_FLAT;
+}
+
+function sessionOutputFor(book, handle, layout) {
+  return book.sessionOutputs?.find((output) =>
+    output.rootHandle === handle && output.layout === layout
+  ) || null;
+}
+
+function appendOutputExample(container, layout) {
+  container.replaceChildren();
+  if (!customOutputHandle) return;
+  const root = document.createElement('span');
+  root.className = 'block font-semibold text-canvas-700 dark:text-canvas-200';
+  root.textContent = `📁 ${customOutputHandle.name}/`;
+  container.appendChild(root);
+
+  if (books.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'mt-1 block';
+    empty.textContent = 'No books found in the selected folder.';
+    container.appendChild(empty);
+    return;
+  }
+
+  const usedFlatNames = new Map();
+  for (const book of books.slice(0, 2)) {
+    const count = (usedFlatNames.get(book.name.toLowerCase()) || 0) + 1;
+    usedFlatNames.set(book.name.toLowerCase(), count);
+    const baseName = layout === OUTPUT_LAYOUT_FLAT && count > 1
+      ? `${book.name} - ${count}`
+      : book.name;
+    const entry = document.createElement('span');
+    entry.className = 'mt-2 block border-l-2 border-canvas-300 dark:border-canvas-700 pl-2';
+    if (layout === OUTPUT_LAYOUT_FOLDERS) {
+      const folder = document.createElement('span');
+      folder.className = 'block text-canvas-500 dark:text-canvas-400';
+      folder.textContent = `📁 ${book.outputPathParts.join(' / ')}/`;
+      entry.appendChild(folder);
+    }
+    const full = document.createElement('span');
+    full.className = 'block';
+    full.textContent = `📄 ${baseName}.pdf`;
+    entry.appendChild(full);
+    if (els.previewEnabled.checked) {
+      const preview = document.createElement('span');
+      preview.className = 'block';
+      preview.textContent = `📄 ${baseName} - Preview.pdf`;
+      entry.appendChild(preview);
+    }
+    container.appendChild(entry);
+  }
+}
+
 function renderOutputSettings() {
   els.outputLocation.textContent = customOutputHandle
-    ? `PDFs will go inside ${customOutputHandle.name} / ${rootHandle?.name || 'selected folder'}, following the book folders.`
+    ? `Output folder: ${customOutputHandle.name}`
     : "Beside each book's images, as usual.";
+  els.chooseOutputLabel.textContent = customOutputHandle ? 'Change output folder' : 'Choose output folder';
   els.resetOutputBtn.classList.toggle('hidden', !customOutputHandle);
+  els.outputLayoutOptions.classList.toggle('hidden', !customOutputHandle);
+  if (customOutputHandle) {
+    appendOutputExample(els.flatLayoutExample, OUTPUT_LAYOUT_FLAT);
+    appendOutputExample(els.foldersLayoutExample, OUTPUT_LAYOUT_FOLDERS);
+    const remaining = Math.max(0, books.length - 2);
+    els.outputExampleNote.textContent = remaining
+      ? `+ ${remaining} more book${remaining === 1 ? '' : 's'}. Existing PDF names get a safe suffix.`
+      : 'Examples use your book folders. Existing PDF names get a safe suffix.';
+  }
   els.previewOptions.classList.toggle('hidden', !els.previewEnabled.checked);
   els.previewOptions.classList.toggle('flex', els.previewEnabled.checked);
   els.previewPageCount.classList.toggle('hidden', els.previewCountMode.value !== 'manual');
+  els.excludePagesOptions.classList.toggle('hidden', !els.excludeFirstPages.checked);
+  els.excludePagesOptions.classList.toggle('flex', els.excludeFirstPages.checked);
+  const excludedCount = normalizeExcludedPageCount();
+  els.excludedPageCountVisual.textContent = String(excludedCount);
+  els.firstIncludedPage.textContent = String(excludedCount + 1);
 }
 
 function updateSettingsSummary() {
@@ -119,6 +211,7 @@ function updateSettingsSummary() {
   ];
   if (els.pageNumbersEnabled.checked) parts.push('page numbers');
   if (els.searchableTextEnabled.checked) parts.push('OCR');
+  if (els.excludeFirstPages.checked) parts.push(`skip ${normalizeExcludedPageCount()} pages`);
   els.settingsSummary.textContent = parts.join(' · ');
 }
 
@@ -131,32 +224,38 @@ function applyCurrentSettingsToBooks() {
   const previewEnabled = els.previewEnabled.checked;
   const previewMode = els.previewCountMode.value;
   const previewManualCount = normalizePreviewPageCount();
+  const outputLayout = currentOutputLayout();
+  const excludeFirstPages = els.excludeFirstPages.checked;
+  const excludedPageCount = normalizeExcludedPageCount();
 
   books.forEach((book) => {
     const marker = book.markerRecord;
-    if (book.status === 'processing' || book.status === 'error') return;
+    if (book.status === 'processing') return;
+    const hadError = book.status === 'error';
+    if (hadError) book.error = null;
     if (!marker) {
-      book.status = customOutputHandle || previewEnabled
+      book.status = customOutputHandle || previewEnabled || excludeFirstPages
         ? 'pending'
-        : (book.pdfNames.length > 0 ? 'done' : 'pending');
-      book.notice = customOutputHandle || previewEnabled
+        : (!hadError && book.pdfNames.length > 0 ? 'done' : 'pending');
+      book.notice = customOutputHandle || previewEnabled || excludeFirstPages
         ? 'New output options selected. Build required.'
         : null;
       return;
     }
     if (Number(marker.formatVersion) < DONE_FORMAT_VERSION) {
-      if (customOutputHandle || previewEnabled) {
-        book.status = 'pending';
-        book.notice = 'New output options selected. Build required.';
-      }
+      book.status = 'pending';
+      book.notice = 'Built by an older Bindery version. Rebuild required.';
       return;
     }
 
     const outputMatches = customOutputHandle
-      ? marker.outputMode === 'custom' && book.sessionOutput?.rootHandle === customOutputHandle
+      ? marker.outputMode === 'custom' &&
+        (marker.outputLayout || OUTPUT_LAYOUT_FOLDERS) === outputLayout &&
+        Boolean(sessionOutputFor(book, customOutputHandle, outputLayout))
       : (marker.outputMode || 'source') === 'source';
     const previewMatches = Boolean(marker.previewEnabled) === previewEnabled &&
       (!previewEnabled || (
+        marker.previewWatermarkVersion === 1 &&
         (marker.previewMode || 'auto') === previewMode &&
         (previewMode !== 'manual' || marker.previewManualCount === previewManualCount)
       ));
@@ -168,6 +267,8 @@ function applyCurrentSettingsToBooks() {
       marker.pageNumbersEnabled === pageNumbersEnabled &&
       marker.searchableTextEnabled === searchableTextEnabled &&
       marker.quality === quality &&
+      Boolean(marker.excludeFirstPages) === excludeFirstPages &&
+      (!excludeFirstPages || marker.excludedPageCount === excludedPageCount) &&
       outputMatches && previewMatches;
     book.status = matches ? 'done' : 'pending';
     book.notice = matches ? null : 'Output or PDF settings changed. Rebuild required.';
@@ -269,9 +370,12 @@ function renderSummary() {
   els.emptyExtractArchivesBtn.disabled = isBusy;
   els.chooseOutputBtn.disabled = isBusy;
   els.resetOutputBtn.disabled = isBusy;
+  els.outputLayoutInputs.forEach((input) => { input.disabled = isBusy; });
   els.previewEnabled.disabled = isBusy;
   els.previewCountMode.disabled = isBusy;
   els.previewPageCount.disabled = isBusy;
+  els.excludeFirstPages.disabled = isBusy;
+  els.excludedPageCount.disabled = isBusy;
   renderOutputSettings();
   updateSettingsSummary();
 }
@@ -312,6 +416,7 @@ async function loadFolder() {
 
   rootHandle = handle;
   customOutputHandle = null;
+  els.outputLayoutInputs.find((input) => input.value === OUTPUT_LAYOUT_FLAT).checked = true;
   books = [];
   els.folderPath.classList.remove('hidden');
   els.folderPath.classList.add('flex');
@@ -369,6 +474,7 @@ async function extractArchives() {
 
   showSelectedFolder(handle);
   customOutputHandle = null;
+  els.outputLayoutInputs.find((input) => input.value === OUTPUT_LAYOUT_FLAT).checked = true;
   books = [];
   isExtracting = true;
   renderSummary();
@@ -424,11 +530,10 @@ async function extractArchives() {
 
 async function rescan() {
   if (!rootHandle) return;
-  const previous = new Map(books.map((book) => [book.relativePath, book.sessionOutput]));
+  const previous = new Map(books.map((book) => [book.relativePath, book.sessionOutputs]));
   books = await scanBooks(rootHandle);
   books.forEach((book) => {
-    const sessionOutput = previous.get(book.relativePath);
-    if (sessionOutput?.rootHandle === customOutputHandle) book.sessionOutput = sessionOutput;
+    book.sessionOutputs = previous.get(book.relativePath) || [];
   });
   applyCurrentSettingsToBooks();
   renderAll();
@@ -436,12 +541,24 @@ async function rescan() {
 
 async function chooseOutputFolder() {
   if (isProcessing || isExtracting) return;
+  let selected;
   try {
-    customOutputHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    selected = await window.showDirectoryPicker({ mode: 'readwrite' });
   } catch (err) {
     if (err.name === 'AbortError') return;
     throw err;
   }
+  const knownHandles = new Set([
+    customOutputHandle,
+    ...books.flatMap((book) => (book.sessionOutputs || []).map((item) => item.rootHandle)),
+  ]);
+  for (const known of knownHandles) {
+    if (known && typeof selected.isSameEntry === 'function' && await selected.isSameEntry(known)) {
+      selected = known;
+      break;
+    }
+  }
+  customOutputHandle = selected;
   applyCurrentSettingsToBooks();
   renderAll();
 }
@@ -463,7 +580,8 @@ async function processOneBook(book, settings) {
   const {
     qualityMode, squareCoverCount, coversAtEnd, pageNumbersEnabled,
     searchableTextEnabled, recognizeWords, ocrConcurrency,
-    outputHandle, previewEnabled, previewMode, previewManualCount,
+    outputHandle, outputLayout, previewEnabled, previewMode, previewManualCount,
+    excludeFirstPages, excludedPageCount, reserveOutputNames,
   } = settings;
   const index = books.indexOf(book);
   book.status = 'processing';
@@ -473,17 +591,16 @@ async function processOneBook(book, settings) {
 
   try {
     setProgressDetail(`Building PDF — ${book.name}`);
-    // Reading order is decided once, here. Everything downstream (square cover
-    // pages, numbering, OCR skipping covers) keys off page index, so rotating
-    // the trailing covers to the front is all that is needed.
-    const orderedImages = orderPagesForBook(book.imageHandles, {
+    const { images, coverCount } = prepareBookPages(book.imageHandles, {
       coversAtEnd,
       squareCoverCount,
+      excludeFirstPages,
+      excludedPageCount,
     });
-    const pdfBytes = await buildBookPdf(orderedImages, PDFLib, {
+    const pdfBytes = await buildBookPdf(images, PDFLib, {
       compress: qualityMode === 'compressed',
       title: book.name,
-      squareCoverCount,
+      squareCoverCount: coverCount,
       pageNumbersEnabled,
       searchableText: searchableTextEnabled,
       recognizeWords,
@@ -499,38 +616,36 @@ async function processOneBook(book, settings) {
 
     const previewIndexes = previewEnabled
       ? selectPreviewPageIndexes(
-          orderedImages.length,
-          squareCoverCount,
+          images.length,
+          coverCount,
           previewMode === 'manual' ? previewManualCount : null
         )
       : [];
     if (previewIndexes.length > 0) setProgressDetail(`Making preview — ${book.name}`);
     const previewBytes = await buildPreviewPdf(pdfBytes, previewIndexes, PDFLib);
 
-    const outputDirectory = await resolveOutputDirectory(book, outputHandle);
-    const existingPdfNames = outputHandle
-      ? await listPdfNames(outputDirectory)
-      : book.pdfNames;
+    const outputDirectory = await resolveOutputDirectory(book, outputHandle, outputLayout);
     const ownedOutput = outputHandle
-      ? (book.sessionOutput?.rootHandle === outputHandle ? book.sessionOutput : null)
+      ? sessionOutputFor(book, outputHandle, outputLayout)
       : ((book.markerRecord?.outputMode || 'source') === 'source'
           ? book.markerRecord
           : {
               pdfFile: book.markerRecord?.sourcePdfFile,
               previewFile: book.markerRecord?.sourcePreviewFile,
             });
-    const pdfName = chooseOutputPdfName({
-      name: book.name,
-      pdfNames: existingPdfNames,
-      generatedPdfName: ownedOutput?.pdfName || ownedOutput?.pdfFile || null,
+    const key = outputHandle
+      ? (outputLayout === OUTPUT_LAYOUT_FLAT
+          ? 'flat'
+          : `folders:${book.outputPathParts.join('\0')}`)
+      : `source:${book.relativePath}`;
+    const { pdfName, previewName } = await reserveOutputNames({
+      book,
+      directory: outputDirectory,
+      key,
+      layout: outputHandle ? outputLayout : OUTPUT_LAYOUT_FOLDERS,
+      ownedOutput,
+      previewEnabled: Boolean(previewBytes),
     });
-    const previewName = previewBytes
-      ? choosePreviewPdfName(
-          pdfName,
-          [...existingPdfNames, pdfName],
-          ownedOutput?.previewName || ownedOutput?.previewFile || null
-        )
-      : null;
 
     await writePdf(outputDirectory, pdfName, pdfBytes);
     if (previewBytes) await writePdf(outputDirectory, previewName, previewBytes);
@@ -547,6 +662,9 @@ async function processOneBook(book, settings) {
       ocrLanguage: searchableTextEnabled ? DEFAULT_OCR_LANGUAGE : null,
       outputMode: outputHandle ? 'custom' : 'source',
       outputRootName: outputHandle?.name || null,
+      outputLayout: outputHandle ? outputLayout : null,
+      excludeFirstPages,
+      excludedPageCount: excludeFirstPages ? excludedPageCount : null,
       sourcePdfFile: outputHandle
         ? ((book.markerRecord?.outputMode || 'source') === 'source'
             ? book.markerRecord?.pdfFile || null
@@ -558,6 +676,7 @@ async function processOneBook(book, settings) {
             : book.markerRecord?.sourcePreviewFile || null)
         : previewName,
       previewEnabled,
+      previewWatermarkVersion: previewEnabled ? 1 : null,
       previewMode: previewEnabled ? previewMode : null,
       previewManualCount: previewEnabled && previewMode === 'manual' ? previewManualCount : null,
       previewFile: previewName,
@@ -568,11 +687,15 @@ async function processOneBook(book, settings) {
     await doneWritable.write(JSON.stringify(doneRecord, null, 2));
     await doneWritable.close();
 
-    book.generatedPdfName = pdfName;
+    if (!outputHandle) book.generatedPdfName = pdfName;
     book.markerRecord = doneRecord;
-    book.sessionOutput = outputHandle
-      ? { rootHandle: outputHandle, pdfName, previewName }
-      : null;
+    if (outputHandle) {
+      book.sessionOutputs ||= [];
+      book.sessionOutputs = book.sessionOutputs.filter((item) =>
+        item.rootHandle !== outputHandle || item.layout !== outputLayout
+      );
+      book.sessionOutputs.push({ rootHandle: outputHandle, layout: outputLayout, pdfName, previewName });
+    }
     if (!outputHandle && !book.pdfNames.some((name) => name.toLowerCase() === pdfName.toLowerCase())) {
       book.pdfNames.push(pdfName);
     }
@@ -605,9 +728,13 @@ async function processBooks(targetBooks) {
   const pageNumbersEnabled = els.pageNumbersEnabled.checked;
   const searchableTextEnabled = els.searchableTextEnabled.checked;
   const outputHandle = customOutputHandle;
+  const outputLayout = currentOutputLayout();
   const previewEnabled = els.previewEnabled.checked;
   const previewMode = els.previewCountMode.value;
   const previewManualCount = normalizePreviewPageCount();
+  const excludeFirstPages = els.excludeFirstPages.checked;
+  const excludedPageCount = normalizeExcludedPageCount();
+  const reserveOutputNames = createOutputNameAllocator();
   updateProgress(0, total);
 
   let ocr = null;
@@ -647,9 +774,13 @@ async function processBooks(targetBooks) {
         recognizeWords,
         ocrConcurrency,
         outputHandle,
+        outputLayout,
         previewEnabled,
         previewMode,
         previewManualCount,
+        excludeFirstPages,
+        excludedPageCount,
+        reserveOutputNames,
       });
       completed += 1;
       updateProgress(completed, total);
@@ -682,6 +813,10 @@ els.redoAllBtn.addEventListener('click', redoAllBooks);
 els.processAllBtn.addEventListener('click', processAllPending);
 els.chooseOutputBtn.addEventListener('click', chooseOutputFolder);
 els.resetOutputBtn.addEventListener('click', useImageFolders);
+els.outputLayoutInputs.forEach((input) => input.addEventListener('change', () => {
+  applyCurrentSettingsToBooks();
+  renderAll();
+}));
 els.previewEnabled.addEventListener('change', () => {
   applyCurrentSettingsToBooks();
   renderAll();
@@ -691,6 +826,21 @@ els.previewCountMode.addEventListener('change', () => {
   renderAll();
 });
 els.previewPageCount.addEventListener('change', () => {
+  applyCurrentSettingsToBooks();
+  renderAll();
+});
+els.excludeFirstPages.addEventListener('change', () => {
+  applyCurrentSettingsToBooks();
+  renderAll();
+});
+els.excludedPageCount.addEventListener('input', () => {
+  const parsed = Number.parseInt(els.excludedPageCount.value, 10);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    els.excludedPageCountVisual.textContent = String(parsed);
+    els.firstIncludedPage.textContent = String(parsed + 1);
+  }
+});
+els.excludedPageCount.addEventListener('change', () => {
   applyCurrentSettingsToBooks();
   renderAll();
 });
@@ -731,6 +881,7 @@ els.searchableTextEnabled.addEventListener('change', () => {
 if (checkBrowserSupport()) {
   normalizeSquareCoverCount();
   normalizePreviewPageCount();
+  normalizeExcludedPageCount();
   renderOutputSettings();
   updateSettingsSummary();
   refreshIcons();

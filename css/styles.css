@@ -110,6 +110,21 @@ html {
   transform: rotate(180deg);
 }
 
+.output-layout-choice:has(input:checked) {
+  border-color: #6672f4;
+  background: rgba(102, 114, 244, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(102, 114, 244, 0.2);
+}
+
+.output-layout-choice:focus-within {
+  outline: 2px solid #6672f4;
+  outline-offset: 2px;
+}
+
+.output-example {
+  overflow-wrap: anywhere;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-chevron {
     transition: none;
