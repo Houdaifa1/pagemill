@@ -182,7 +182,7 @@ async function main() {
   );
   assert(!!badBook && badBook.status === 'pending' && badBook.imageCount === 1, 'Bad-Book scanned as pending with 1 (corrupt) image');
   assert(!!nestedBook && nestedBook.relativePath === 'Collection / Nested-Book', 'nested book is discovered with its relative path');
-  assert(!!clientPdfBook && clientPdfBook.status === 'done', 'folder with images and an existing PDF is marked done');
+  assert(!!clientPdfBook && clientPdfBook.status === 'pending', 'folder with images and a PDF but no .done record still needs building');
   assert(clientPdfBook.generatedPdfName === null, 'client PDF is not claimed as Bindery-owned without a .done record');
   assert(chooseOutputPdfName(clientPdfBook) === 'Client-PDF-Book - Bindery.pdf', 'redo chooses a separate Bindery filename and protects the client PDF');
   assert(

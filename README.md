@@ -39,6 +39,17 @@ removes the first images in folder order without changing the source files.
 Turning it off restores the previous cover settings. If too few pages remain
 for a book, Bindery reports that book as an error instead of making an empty PDF.
 
+**Add answer keys?** appears after you select a library, and is off by default.
+**Add automatically** adds every PDF found with each book to the end of its full
+PDF: PDFs in the book's folder or its subfolders, or beside the book's folder when
+that folder holds only this book. A PDF shared by several books is left out and
+listed so you can assign it. **Choose for each book** lets you pick the PDF in the
+book list, and offers any PDFs it found. Bindery never treats a book's own earlier
+output as a key, never changes the key files, and leaves previews without answers.
+A folder counts as finished only once Bindery has built it, so images beside a
+PDF still show as pending. Added pages keep their own size, numbering, and text. A password-protected or
+damaged key fails only that book, by name, and writes nothing for it.
+
 Firefox and Safari cannot grant the folder access this app needs. Use a recent
 Chromium browser.
 
@@ -75,7 +86,7 @@ npm test
 npm run build
 ```
 
-`npm test` checks page ordering, archive extraction, output paths, skipped pages, and previews. For the browser checks,
+`npm test` checks page ordering, archive extraction, output paths, skipped pages, previews, and answer keys. For the browser checks,
 visit `/test/test.html` on your local server. Optional PDF fixtures live in
 `test/build-*.mjs`; the OCR and page-numbering fixtures need
 `BINDERY_QA_BOOK` set to a local folder of page images. Generated PDFs and test

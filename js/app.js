@@ -1,4 +1,4 @@
-import { scanBooks, DONE_FORMAT_VERSION } from './fs-scan.js?v=20260929-2';
+import { scanBooks, DONE_FORMAT_VERSION } from './fs-scan.js?v=20261031-2';
 import {
   buildBookPdf,
   DEFAULT_OCR_LANGUAGE,
@@ -14,6 +14,16 @@ import {
   createOutputNameAllocator,
 } from './output-location.js?v=20260930-1';
 import { selectPreviewPageIndexes, buildPreviewPdf } from './preview.js?v=20260930-1';
+import {
+  ANSWER_KEYS_AUTO,
+  ANSWER_KEYS_MANUAL,
+  ANSWER_KEYS_NONE,
+  answerKeySignature,
+  appendAnswerKeys,
+  ownedPdfNames,
+  scanAnswerKeys,
+} from './answer-keys.js?v=20261031-1';
+import { naturalCompare } from './natural-sort.js?v=20260901-1';
 
 // Two books at a time keeps memory stable when each book contains dozens of
 // multi-megabyte scans. Higher concurrency can freeze or crash browser tabs.
@@ -71,6 +81,11 @@ const els = {
   excludePagesOptions: document.getElementById('exclude-pages-options'),
   excludedPageCount: document.getElementById('excluded-page-count'),
   firstIncludedPage: document.getElementById('first-included-page'),
+  answerKeyModeInputs: [...document.querySelectorAll('input[name="answer-key-mode"]')],
+  answerKeyStatusWrap: document.getElementById('answer-key-status-wrap'),
+  answerKeyStatus: document.getElementById('answer-key-status'),
+  answerKeyUnmatched: document.getElementById('answer-key-unmatched'),
+  useFoundKeysBtn: document.getElementById('use-found-keys-btn'),
   folderPath: document.getElementById('folder-path'),
   folderPathName: document.getElementById('folder-path-name'),
   bookCount: document.getElementById('book-count'),
@@ -92,7 +107,9 @@ let rootHandle = null;
 let customOutputHandle = null;
 let isProcessing = false;
 let isExtracting = false;
+let isFindingAnswerKeys = false;
 let coverSettingsBeforeSkip = null;
+let unmatchedAnswerKeys = [];
 
 function readSquareCoverCount() {
   const parsed = Number.parseInt(els.squareCoverCount.value, 10);
@@ -136,6 +153,20 @@ function normalizeExcludedPageCount() {
 
 function currentOutputLayout() {
   return els.outputLayoutInputs.find((input) => input.checked)?.value || OUTPUT_LAYOUT_FLAT;
+}
+
+function currentAnswerKeyMode() {
+  return els.answerKeyModeInputs.find((input) => input.checked)?.value || ANSWER_KEYS_NONE;
+}
+
+function setAnswerKeyMode(mode) {
+  els.answerKeyModeInputs.forEach((input) => { input.checked = input.value === mode; });
+}
+
+function activeAnswerKeys(book, mode = currentAnswerKeyMode()) {
+  if (mode === ANSWER_KEYS_AUTO) return book.answerKeyCandidates || [];
+  if (mode === ANSWER_KEYS_MANUAL) return book.answerKeySelection || [];
+  return [];
 }
 
 function sessionOutputFor(book, handle, layout) {
@@ -236,19 +267,24 @@ function applyCurrentSettingsToBooks() {
   const previewManualCount = normalizePreviewPageCount();
   const outputLayout = currentOutputLayout();
   const excludedPageCount = normalizeExcludedPageCount();
+  const answerKeyMode = currentAnswerKeyMode();
 
   books.forEach((book) => {
     const marker = book.markerRecord;
+    const keySignature = answerKeySignature(activeAnswerKeys(book, answerKeyMode));
     if (book.status === 'processing') return;
     const hadError = book.status === 'error';
     if (hadError) book.error = null;
     if (!marker) {
-      book.status = customOutputHandle || previewEnabled || excludeFirstPages
-        ? 'pending'
-        : (!hadError && book.pdfNames.length > 0 ? 'done' : 'pending');
+      // Only a .done marker proves a book was built. A PDF beside the images may
+      // be an answer key, so it is protected by name but doesn't finish the book.
+      book.status = 'pending';
       book.notice = customOutputHandle || previewEnabled || excludeFirstPages
         ? 'New output options selected. Build required.'
         : null;
+      if (keySignature && !customOutputHandle && !previewEnabled && !excludeFirstPages) {
+        book.notice = 'Answer key selected. Build required.';
+      }
       return;
     }
     if (Number(marker.formatVersion) < DONE_FORMAT_VERSION) {
@@ -269,7 +305,8 @@ function applyCurrentSettingsToBooks() {
         (previewMode !== 'manual' || marker.previewManualCount === previewManualCount)
       ));
 
-    const matches =
+    const keysMatch = (marker.answerKeySignature || '') === keySignature;
+    const otherSettingsMatch =
       marker.imageCount === book.imageCount &&
       marker.squareCoverCount === squareCoverCount &&
       marker.coversAtEnd === coversAtEnd &&
@@ -279,8 +316,12 @@ function applyCurrentSettingsToBooks() {
       Boolean(marker.excludeFirstPages) === excludeFirstPages &&
       (!excludeFirstPages || marker.excludedPageCount === excludedPageCount) &&
       outputMatches && previewMatches;
+    const matches = otherSettingsMatch && keysMatch;
     book.status = matches ? 'done' : 'pending';
-    book.notice = matches ? null : 'Output or PDF settings changed. Rebuild required.';
+    if (matches) book.notice = null;
+    else book.notice = otherSettingsMatch
+      ? 'Answer keys changed. Rebuild required.'
+      : 'Output or PDF settings changed. Rebuild required.';
   });
 }
 
@@ -305,6 +346,17 @@ function pillMarkup(status) {
     error: { label: 'Error', cls: 'status-pill--error' },
   }[status];
   return `<span class="status-pill ${config.cls}"><span class="dot"></span>${config.label}</span>`;
+}
+
+function answerKeyActionButton(label, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'answer-key-name truncate rounded border border-canvas-200 dark:border-canvas-700 px-1.5 py-0.5 font-medium text-canvas-700 dark:text-canvas-200 hover:bg-canvas-100 dark:hover:bg-canvas-800 disabled:cursor-not-allowed disabled:opacity-40';
+  button.textContent = label;
+  button.title = label;
+  button.disabled = isProcessing || isExtracting || isFindingAnswerKeys;
+  button.addEventListener('click', onClick);
+  return button;
 }
 
 function renderBookRow(book, index) {
@@ -336,6 +388,8 @@ function renderBookRow(book, index) {
     errorEl.classList.remove('flex');
   }
 
+  renderBookAnswerKeys(node.querySelector('.book-key'), book);
+
   const rebuildBtn = node.querySelector('.rebuild-btn');
   if (book.status === 'done' || book.status === 'error') {
     rebuildBtn.classList.remove('hidden');
@@ -343,6 +397,87 @@ function renderBookRow(book, index) {
   }
 
   return node;
+}
+
+function renderBookAnswerKeys(container, book) {
+  const mode = currentAnswerKeyMode();
+  container.classList.toggle('hidden', mode === ANSWER_KEYS_NONE);
+  container.classList.toggle('flex', mode !== ANSWER_KEYS_NONE);
+  if (mode === ANSWER_KEYS_NONE) return;
+
+  const keys = activeAnswerKeys(book, mode);
+  const icon = document.createElement('i');
+  icon.dataset.lucide = 'key-round';
+  icon.className = `h-3.5 w-3.5 shrink-0 ${keys.length > 0 ? 'text-accent-500' : ''}`;
+  container.appendChild(icon);
+
+  const label = document.createElement('span');
+  label.className = 'answer-key-name truncate';
+  if (keys.length > 0) {
+    label.textContent = keys.map((key) => key.name).join(', ');
+    label.title = keys.map((key) => key.path).join('\n');
+    label.classList.add('text-canvas-700', 'dark:text-canvas-200');
+  } else {
+    label.textContent = mode === ANSWER_KEYS_AUTO ? 'No answer key found' : 'No answer key';
+  }
+  container.appendChild(label);
+
+  if (mode === ANSWER_KEYS_MANUAL) {
+    const found = book.answerKeyCandidates || [];
+    if (keys.length === 0 && found.length > 0) {
+      const foundLabel = found.length === 1 ? `Use ${found[0].name}` : `Use ${found.length} found PDFs`;
+      container.appendChild(answerKeyActionButton(foundLabel, () => selectAnswerKeys(book, found)));
+    }
+    container.appendChild(answerKeyActionButton(
+      keys.length > 0 ? 'Change' : 'Choose PDF',
+      () => chooseAnswerKeys(book)
+    ));
+    if (keys.length > 0) {
+      container.appendChild(answerKeyActionButton('Remove', () => selectAnswerKeys(book, [])));
+    }
+  }
+
+  if (book.answerKeyWarning) {
+    const warning = document.createElement('span');
+    warning.className = 'basis-full text-warn-700 dark:text-warn';
+    warning.textContent = book.answerKeyWarning;
+    container.appendChild(warning);
+  }
+}
+
+function renderAnswerKeySettings() {
+  const mode = currentAnswerKeyMode();
+  const isBusy = isProcessing || isExtracting || isFindingAnswerKeys;
+  els.answerKeyModeInputs.forEach((input) => { input.disabled = isBusy; });
+  els.answerKeyStatusWrap.classList.toggle('hidden', mode === ANSWER_KEYS_NONE);
+  els.answerKeyStatusWrap.classList.toggle('flex', mode !== ANSWER_KEYS_NONE);
+
+  const withKeys = books.filter((book) => activeAnswerKeys(book, mode).length > 0).length;
+  const totalBooks = `${books.length} book${books.length === 1 ? '' : 's'}`;
+  if (isFindingAnswerKeys) {
+    els.answerKeyStatus.textContent = 'Looking for PDFs in every folder…';
+  } else if (mode === ANSWER_KEYS_AUTO) {
+    els.answerKeyStatus.textContent = withKeys > 0
+      ? `Found answer keys for ${withKeys} of ${totalBooks}. Check the names in the book list.`
+      : `No answer key PDFs found for these ${totalBooks}.`;
+  } else if (mode === ANSWER_KEYS_MANUAL) {
+    els.answerKeyStatus.textContent = `${withKeys} of ${totalBooks} ${withKeys === 1 ? 'has' : 'have'} an answer key. Books without one are built from images only.`;
+  }
+
+  const unmatched = mode === ANSWER_KEYS_NONE || isFindingAnswerKeys ? [] : unmatchedAnswerKeys;
+  els.answerKeyUnmatched.classList.toggle('hidden', unmatched.length === 0);
+  if (unmatched.length > 0) {
+    const shown = unmatched.slice(0, 2).map((key) => key.path).join(', ');
+    const more = unmatched.length > 2 ? ` and ${unmatched.length - 2} more` : '';
+    els.answerKeyUnmatched.textContent = `Not added, because the book isn't clear: ${shown}${more}. Use Choose for each book to assign ${unmatched.length === 1 ? 'it' : 'them'}.`;
+  }
+
+  const unassigned = mode === ANSWER_KEYS_MANUAL
+    ? books.filter((book) => !book.answerKeySelection?.length && book.answerKeyCandidates?.length)
+    : [];
+  els.useFoundKeysBtn.classList.toggle('hidden', unassigned.length === 0);
+  els.useFoundKeysBtn.disabled = isBusy;
+  els.useFoundKeysBtn.textContent = `Use found PDFs for ${unassigned.length} book${unassigned.length === 1 ? '' : 's'}`;
 }
 
 function renderBookList() {
@@ -364,7 +499,7 @@ function renderSummary() {
   els.errorCount.textContent = String(errored);
   els.errorCountWrap.classList.toggle('hidden', errored === 0);
 
-  const isBusy = isProcessing || isExtracting;
+  const isBusy = isProcessing || isExtracting || isFindingAnswerKeys;
   els.processAllBtn.disabled = isBusy || pending === 0;
   els.redoAllBtn.disabled = isBusy || books.length === 0;
   els.rescanBtn.disabled = isBusy;
@@ -386,6 +521,7 @@ function renderSummary() {
   els.excludeFirstPages.disabled = isBusy;
   els.excludedPageCount.disabled = isBusy;
   renderOutputSettings();
+  renderAnswerKeySettings();
   updateSettingsSummary();
 }
 
@@ -427,11 +563,12 @@ async function loadFolder() {
   customOutputHandle = null;
   els.outputLayoutInputs.find((input) => input.value === OUTPUT_LAYOUT_FLAT).checked = true;
   books = [];
+  setAnswerKeyMode(ANSWER_KEYS_NONE);
   els.folderPath.classList.remove('hidden');
   els.folderPath.classList.add('flex');
   els.folderPathName.textContent = handle.name;
 
-  await rescan();
+  await rescan({ restoreAnswerKeyMode: true });
 
   els.emptyState.classList.add('hidden');
   els.libraryView.classList.remove('hidden');
@@ -485,6 +622,7 @@ async function extractArchives() {
   customOutputHandle = null;
   els.outputLayoutInputs.find((input) => input.value === OUTPUT_LAYOUT_FLAT).checked = true;
   books = [];
+  setAnswerKeyMode(ANSWER_KEYS_NONE);
   isExtracting = true;
   renderSummary();
   setArchiveStatus('Scanning for archives…', 'Checking this folder and every folder inside it.');
@@ -502,7 +640,7 @@ async function extractArchives() {
     });
 
     rootHandle = handle;
-    await rescan();
+    await rescan({ restoreAnswerKeyMode: true });
     showLibrary();
 
     if (result.archivesFound === 0) {
@@ -537,13 +675,152 @@ async function extractArchives() {
   }
 }
 
-async function rescan() {
+async function rescan({ restoreAnswerKeyMode = false } = {}) {
   if (!rootHandle) return;
-  const previous = new Map(books.map((book) => [book.relativePath, book.sessionOutputs]));
+  const previous = new Map(books.map((book) => [book.relativePath, book]));
   books = await scanBooks(rootHandle);
   books.forEach((book) => {
-    book.sessionOutputs = previous.get(book.relativePath) || [];
+    const earlier = previous.get(book.relativePath);
+    book.sessionOutputs = earlier?.sessionOutputs || [];
+    book.answerKeySelection = earlier?.answerKeySelection;
   });
+  if (restoreAnswerKeyMode) {
+    // Reopening a finished library keeps its keys instead of asking for rebuilds.
+    const built = books.find((book) => book.markerRecord?.answerKeySignature);
+    if (built) setAnswerKeyMode(built.markerRecord.answerKeyMode);
+  }
+  await refreshAnswerKeys();
+  applyCurrentSettingsToBooks();
+  renderAll();
+}
+
+// With keys off this does no extra folder reading at all.
+async function refreshAnswerKeys() {
+  const mode = currentAnswerKeyMode();
+  unmatchedAnswerKeys = [];
+  books.forEach((book) => {
+    book.answerKeyCandidates = [];
+    book.answerKeyWarning = null;
+  });
+  if (mode === ANSWER_KEYS_NONE || !rootHandle) return;
+
+  const outputFolderNames = books.map((book) => book.markerRecord?.outputRootName).filter(Boolean);
+  if (customOutputHandle) outputFolderNames.push(customOutputHandle.name);
+  const scan = await scanAnswerKeys(rootHandle, books, { outputFolderNames });
+  unmatchedAnswerKeys = scan.unmatched;
+  for (const book of books) {
+    book.answerKeyCandidates = scan.candidatesByBook.get(book) || [];
+    if (mode === ANSWER_KEYS_MANUAL) await refreshManualSelection(book, scan.byPath);
+  }
+}
+
+async function refreshManualSelection(book, pdfsByPath) {
+  const marker = book.markerRecord;
+  const missing = [];
+  let selection = book.answerKeySelection;
+  if (!selection && marker?.answerKeyMode === ANSWER_KEYS_MANUAL && Array.isArray(marker.answerKeys)) {
+    // File picks do not survive a page reload, so saved picks are found again by path.
+    selection = [];
+    for (const saved of marker.answerKeys) {
+      const key = pdfsByPath.get(saved.path);
+      if (key) selection.push(key);
+      else missing.push(saved.name);
+    }
+  } else if (selection) {
+    const current = [];
+    for (const key of selection) {
+      try {
+        const file = await key.handle.getFile();
+        current.push({ ...key, size: file.size, lastModified: file.lastModified });
+      } catch {
+        missing.push(key.name);
+      }
+    }
+    selection = current;
+  }
+  book.answerKeySelection = selection || [];
+  if (missing.length > 0) {
+    book.answerKeyWarning = `Can't find ${missing.join(', ')} any more. Choose ${missing.length === 1 ? 'it' : 'them'} again before rebuilding.`;
+  }
+}
+
+async function changeAnswerKeyMode() {
+  isFindingAnswerKeys = true;
+  renderAll();
+  try {
+    await refreshAnswerKeys();
+  } catch (err) {
+    console.error('Could not look for answer keys:', err);
+    setAnswerKeyMode(ANSWER_KEYS_NONE);
+    setArchiveStatus('Could not look for answer keys', err.message || String(err));
+  } finally {
+    isFindingAnswerKeys = false;
+    applyCurrentSettingsToBooks();
+    renderAll();
+  }
+}
+
+function selectAnswerKeys(book, keys) {
+  if (isProcessing || isExtracting || isFindingAnswerKeys) return;
+  book.answerKeySelection = keys;
+  book.answerKeyWarning = null;
+  applyCurrentSettingsToBooks();
+  renderAll();
+}
+
+// A book's own result can't be its answer key: it would repeat every page, and
+// the next rebuild would overwrite the file it was reading from.
+async function isBookOutput(book, handle) {
+  const inBookFolder = await book.dirHandle.resolve?.(handle);
+  if (inBookFolder?.length === 1 && ownedPdfNames(book).has(handle.name.toLowerCase())) return true;
+  for (const output of book.sessionOutputs || []) {
+    if ([output.pdfName, output.previewName].includes(handle.name)
+      && await output.rootHandle.resolve?.(handle)) return true;
+  }
+  return false;
+}
+
+async function chooseAnswerKeys(book) {
+  if (isProcessing || isExtracting || isFindingAnswerKeys) return;
+  let handles;
+  try {
+    handles = await window.showOpenFilePicker({
+      multiple: true,
+      startIn: book.dirHandle,
+      types: [{ description: 'PDF files', accept: { 'application/pdf': ['.pdf'] } }],
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    console.error('Could not open the file picker:', err);
+    book.answerKeyWarning = `Could not open the file picker: ${err.message || err}`;
+    renderAll();
+    return;
+  }
+
+  const keys = [];
+  const rejected = [];
+  for (const handle of handles) {
+    if (!/\.pdf$/i.test(handle.name) || await isBookOutput(book, handle)) {
+      rejected.push(handle.name);
+      continue;
+    }
+    const file = await handle.getFile();
+    const parts = await rootHandle.resolve?.(handle);
+    keys.push({
+      name: handle.name,
+      handle,
+      // A file outside the library keeps a label, and can't be found again after a reload.
+      path: parts ? parts.join('/') : `outside library/${handle.name}`,
+      size: file.size,
+      lastModified: file.lastModified,
+    });
+  }
+  keys.sort((a, b) => naturalCompare(a.path, b.path));
+
+  if (keys.length > 0) book.answerKeySelection = keys;
+  book.answerKeyWarning = rejected.length > 0
+    ? `Not added: ${rejected.join(', ')}. Choose a PDF that isn't this book's own output.`
+    : null;
   applyCurrentSettingsToBooks();
   renderAll();
 }
@@ -590,7 +867,7 @@ async function processOneBook(book, settings) {
     qualityMode, squareCoverCount, coversAtEnd, pageNumbersEnabled,
     searchableTextEnabled, recognizeWords, ocrConcurrency,
     outputHandle, outputLayout, previewEnabled, previewMode, previewManualCount,
-    excludeFirstPages, excludedPageCount, reserveOutputNames,
+    excludeFirstPages, excludedPageCount, reserveOutputNames, answerKeyMode,
   } = settings;
   const index = books.indexOf(book);
   book.status = 'processing';
@@ -606,7 +883,7 @@ async function processOneBook(book, settings) {
       excludeFirstPages,
       excludedPageCount,
     });
-    const pdfBytes = await buildBookPdf(images, PDFLib, {
+    const bookPdfBytes = await buildBookPdf(images, PDFLib, {
       compress: qualityMode === 'compressed',
       title: book.name,
       squareCoverCount: coverCount,
@@ -631,7 +908,19 @@ async function processOneBook(book, settings) {
         )
       : [];
     if (previewIndexes.length > 0) setProgressDetail(`Making preview — ${book.name}`);
-    const previewBytes = await buildPreviewPdf(pdfBytes, previewIndexes, PDFLib);
+    const previewBytes = await buildPreviewPdf(bookPdfBytes, previewIndexes, PDFLib);
+
+    // Keys are added after the preview is cut, so previews can never show answers.
+    // A bad key fails here, before any file is written.
+    const answerKeys = activeAnswerKeys(book, answerKeyMode);
+    let pdfBytes = bookPdfBytes;
+    let answerKeyRecords = [];
+    if (answerKeys.length > 0) {
+      setProgressDetail(`Adding answer keys — ${book.name}`);
+      const merged = await appendAnswerKeys(bookPdfBytes, answerKeys, PDFLib);
+      pdfBytes = merged.bytes;
+      answerKeyRecords = merged.records;
+    }
 
     const outputDirectory = await resolveOutputDirectory(book, outputHandle, outputLayout);
     const ownedOutput = outputHandle
@@ -689,6 +978,13 @@ async function processOneBook(book, settings) {
       previewMode: previewEnabled ? previewMode : null,
       previewManualCount: previewEnabled && previewMode === 'manual' ? previewManualCount : null,
       previewFile: previewName,
+      answerKeyMode: answerKeyMode === ANSWER_KEYS_NONE ? null : answerKeyMode,
+      answerKeys: answerKeyRecords,
+      answerKeySignature: answerKeySignature(answerKeyRecords),
+      ownedPdfFiles: [...new Set([
+        ...(book.markerRecord?.ownedPdfFiles || []),
+        ...(outputHandle ? [] : [pdfName, previewName].filter(Boolean)),
+      ])],
       formatVersion: DONE_FORMAT_VERSION,
     };
     const doneFileHandle = await book.dirHandle.getFileHandle('.done', { create: true });
@@ -711,6 +1007,12 @@ async function processOneBook(book, settings) {
     if (!outputHandle && previewName && !book.pdfNames.some((name) => name.toLowerCase() === previewName.toLowerCase())) {
       book.pdfNames.push(previewName);
     }
+    // Keep the sizes and dates just read, so the next scan sees these keys as unchanged.
+    if (answerKeyMode === ANSWER_KEYS_MANUAL) {
+      book.answerKeySelection = answerKeys.map((key, keyIndex) => ({ ...key, ...answerKeyRecords[keyIndex] }));
+    } else if (answerKeyMode === ANSWER_KEYS_AUTO) {
+      book.answerKeyCandidates = answerKeys.map((key, keyIndex) => ({ ...key, ...answerKeyRecords[keyIndex] }));
+    }
     if (previewEnabled && previewIndexes.length === 0) {
       book.notice = 'No interior pages to use for a preview.';
     }
@@ -725,7 +1027,7 @@ async function processOneBook(book, settings) {
 }
 
 async function processBooks(targetBooks) {
-  if (isProcessing || targetBooks.length === 0) return;
+  if (isProcessing || isFindingAnswerKeys || targetBooks.length === 0) return;
   isProcessing = true;
   renderSummary();
 
@@ -743,6 +1045,7 @@ async function processBooks(targetBooks) {
   const previewMode = els.previewCountMode.value;
   const previewManualCount = normalizePreviewPageCount();
   const excludedPageCount = normalizeExcludedPageCount();
+  const answerKeyMode = currentAnswerKeyMode();
   const reserveOutputNames = createOutputNameAllocator();
   updateProgress(0, total);
 
@@ -790,6 +1093,7 @@ async function processBooks(targetBooks) {
         excludeFirstPages,
         excludedPageCount,
         reserveOutputNames,
+        answerKeyMode,
       });
       completed += 1;
       updateProgress(completed, total);
@@ -826,6 +1130,18 @@ els.outputLayoutInputs.forEach((input) => input.addEventListener('change', () =>
   applyCurrentSettingsToBooks();
   renderAll();
 }));
+els.answerKeyModeInputs.forEach((input) => input.addEventListener('change', changeAnswerKeyMode));
+els.useFoundKeysBtn.addEventListener('click', () => {
+  if (isProcessing || isExtracting || isFindingAnswerKeys) return;
+  books.forEach((book) => {
+    if (!book.answerKeySelection?.length && book.answerKeyCandidates?.length) {
+      book.answerKeySelection = book.answerKeyCandidates;
+      book.answerKeyWarning = null;
+    }
+  });
+  applyCurrentSettingsToBooks();
+  renderAll();
+});
 els.previewEnabled.addEventListener('change', () => {
   applyCurrentSettingsToBooks();
   renderAll();

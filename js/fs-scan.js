@@ -69,7 +69,7 @@ export async function scanBooks(rootHandle) {
         pdfNames,
         generatedPdfName,
         markerRecord,
-        status: markerIsCurrent || (!doneMarker && pdfNames.length > 0) ? 'done' : 'pending',
+        status: markerIsCurrent ? 'done' : 'pending',
         notice: needsUpgrade ? 'Built by an older Bindery version. Rebuild required.' : null,
         error: null,
       });

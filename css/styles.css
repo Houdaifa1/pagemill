@@ -121,6 +121,10 @@ html {
   outline-offset: 2px;
 }
 
+.answer-key-name {
+  max-width: 18rem;
+}
+
 .output-example {
   overflow-wrap: anywhere;
 }
