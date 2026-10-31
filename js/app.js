@@ -279,17 +279,12 @@ function applyCurrentSettingsToBooks() {
       // Only a .done marker proves a book was built. A PDF beside the images may
       // be an answer key, so it is protected by name but doesn't finish the book.
       book.status = 'pending';
-      book.notice = customOutputHandle || previewEnabled || excludeFirstPages
-        ? 'New output options selected. Build required.'
-        : null;
-      if (keySignature && !customOutputHandle && !previewEnabled && !excludeFirstPages) {
-        book.notice = 'Answer key selected. Build required.';
-      }
+      book.notice = null;
       return;
     }
     if (Number(marker.formatVersion) < DONE_FORMAT_VERSION) {
       book.status = 'pending';
-      book.notice = 'Built by an older Bindery version. Rebuild required.';
+      book.notice = null;
       return;
     }
 
@@ -306,7 +301,7 @@ function applyCurrentSettingsToBooks() {
       ));
 
     const keysMatch = (marker.answerKeySignature || '') === keySignature;
-    const otherSettingsMatch =
+    const matches = keysMatch &&
       marker.imageCount === book.imageCount &&
       marker.squareCoverCount === squareCoverCount &&
       marker.coversAtEnd === coversAtEnd &&
@@ -316,12 +311,8 @@ function applyCurrentSettingsToBooks() {
       Boolean(marker.excludeFirstPages) === excludeFirstPages &&
       (!excludeFirstPages || marker.excludedPageCount === excludedPageCount) &&
       outputMatches && previewMatches;
-    const matches = otherSettingsMatch && keysMatch;
     book.status = matches ? 'done' : 'pending';
-    if (matches) book.notice = null;
-    else book.notice = otherSettingsMatch
-      ? 'Answer keys changed. Rebuild required.'
-      : 'Output or PDF settings changed. Rebuild required.';
+    book.notice = null;
   });
 }
 
