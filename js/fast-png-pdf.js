@@ -19,7 +19,7 @@ function chunkType(bytes, offset) {
   return String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
 }
 
-export function parseDirectRgbPng(bytes, name = 'PNG') {
+export function parseDirectRgbPng(bytes, name = 'PNG', { preserveTransparency = false } = {}) {
   if (bytes.length < 33 || !PNG_SIGNATURE.every((value, index) => bytes[index] === value)) {
     return { supported: false, reason: `${name}: invalid PNG signature` };
   }
@@ -63,6 +63,8 @@ export function parseDirectRgbPng(bytes, name = 'PNG') {
     } else if (type === 'IDAT') {
       idatChunks.push(bytes.subarray(dataOffset, dataOffset + length));
       idatLength += length;
+    } else if (type === 'tRNS' && preserveTransparency) {
+      return { supported: false, reason: `${name}: PNG transparency requires compatibility mode` };
     } else if (type === 'IEND') {
       sawEnd = true;
       break;
@@ -318,7 +320,7 @@ export function buildDirectImagePdf(
 
   const infoObject = nextObjectNumber++;
   addObject(infoObject, [
-    `<< /Title (${escapePdfString(title)}) /Subject (Digital book assembled from square cover pages and US Letter interiors) `,
+    `<< /Title (${escapePdfString(title)}) /Subject (Digital book assembled from page images) `,
     '/Creator (Bindery) /Producer (Bindery direct image engine) >>',
   ]);
 

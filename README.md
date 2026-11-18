@@ -15,11 +15,17 @@ Open [bindery.houdaifa.dev](https://bindery.houdaifa.dev) in Chrome or Edge, the
 select a folder containing JPG or PNG pages. Each folder with page images is
 treated as a book. Nested folders work too.
 
-You can choose how many square cover pages come first, move covers from the end
+You can choose how many cover and thumbnail pages come first, move covers from the end
 of the image list, add page numbers, compress images, or make interior text
 searchable with local OCR. Bindery remembers finished books with a `.done` file
 and lets you redo one book or the whole library. ZIP and TAR archives can be
 extracted before building PDFs.
+
+**Original-size covers** is on by default in **PDF settings**. Each cover and
+thumbnail gets its own full-bleed page at one PDF point per source pixel. Cover images
+retain their pixel dimensions and bypass JPEG recompression. The interior pages
+use US Letter and follow your quality setting. With the switch off, cover images
+fit inside 8.5-inch square pages.
 
 The output choice appears after you select a library. Without another output
 folder, each PDF stays beside its images. With one, the default puts all PDFs

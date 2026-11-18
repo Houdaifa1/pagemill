@@ -1,11 +1,12 @@
-import { readImageForPdf } from './image-io.js?v=20260901-1';
+import { readImageForPdf } from './image-io.js?v=20261118-1';
 import {
   buildDirectImagePdf,
   parseDirectJpeg,
   parseDirectRgbPng,
-} from './fast-png-pdf.js?v=20260902-1';
+} from './fast-png-pdf.js?v=20261118-1';
 import { layoutOcrWords } from './text-layer.js?v=20260902-1';
 import { runPool } from './pool.js?v=20260901-1';
+import { embed16BitPng } from './png16.js?v=20261118-1';
 
 // TPT worksheets are produced as US Letter pages. Images are embedded without
 // re-encoding on the fast path; only the draw rectangle changes.
@@ -56,25 +57,27 @@ export function getPageNumber(
   return pageIndex < normalizedCount ? null : pageIndex - normalizedCount + 1;
 }
 
-// The user explicitly chooses how many leading marketplace covers/thumbnails
-// are square. Covers use an 8.5 x 8.5-inch PDF page; interiors use US Letter.
-// All images are contained, never cropped, so a mistaken count is recoverable.
+// Original-size covers use one PDF point per source pixel. The default cover
+// layout fits the full image inside an 8.5-inch square. Interiors use US Letter.
 export function getPageLayout(
   name,
   imageWidth,
   imageHeight,
   pageIndex,
   squareCoverCount = DEFAULT_SQUARE_COVER_COUNT,
-  pageNumbersEnabled = DEFAULT_PAGE_NUMBERS_ENABLED
+  pageNumbersEnabled = DEFAULT_PAGE_NUMBERS_ENABLED,
+  originalSizeCovers = false
 ) {
   const normalizedCount = Math.max(0, Math.floor(Number(squareCoverCount) || 0));
-  const squareCover = pageIndex < normalizedCount;
+  const isCover = pageIndex < normalizedCount;
+  const pageHeight = isCover ? LETTER_WIDTH : LETTER_HEIGHT;
+  const originalSize = isCover && originalSizeCovers;
   const pageNumber = getPageNumber(pageIndex, normalizedCount, pageNumbersEnabled);
   return {
-    pageWidth: LETTER_WIDTH,
-    pageHeight: squareCover ? LETTER_WIDTH : LETTER_HEIGHT,
+    pageWidth: originalSize ? imageWidth : LETTER_WIDTH,
+    pageHeight: originalSize ? imageHeight : pageHeight,
     fillPage: false,
-    kind: squareCover ? 'square-cover' : 'interior',
+    kind: isCover ? (originalSize ? 'original-cover' : 'square-cover') : 'interior',
     pageNumber,
   };
 }
@@ -122,7 +125,7 @@ function drawInvisibleTextLayer(page, PDFLib, items, font) {
 async function buildWithPdfLib(
   files,
   PDFLib,
-  { compress, squareCoverCount, pageNumbersEnabled, ocrWordsByPage, onPageProcessed }
+  { compress, squareCoverCount, originalSizeCovers, pageNumbersEnabled, ocrWordsByPage, onPageProcessed }
 ) {
   const pdfDoc = await PDFLib.PDFDocument.create();
   const hasNumberedPages = pageNumbersEnabled && files.length > squareCoverCount;
@@ -139,36 +142,55 @@ async function buildWithPdfLib(
 
   for (let pageIndex = 0; pageIndex < files.length; pageIndex += 1) {
     const { file, name } = files[pageIndex];
-    const image = await readImageForPdf(file, { compress });
-    const embedded =
-      image.type === 'png'
-        ? await pdfDoc.embedPng(image.bytes)
-        : await pdfDoc.embedJpg(image.bytes);
+    const preserveOriginal = originalSizeCovers && pageIndex < squareCoverCount;
+    const image = await readImageForPdf(file, { compress, preserveOriginal });
+    const embedHighBitPng = preserveOriginal && image.type === 'png' && image.bytes[24] === 16;
+    let embedded;
+    if (image.type === 'jpg') {
+      embedded = await pdfDoc.embedJpg(image.bytes);
+    } else if (embedHighBitPng) {
+      embedded = await embed16BitPng(image.bytes, pdfDoc);
+    } else {
+      embedded = await pdfDoc.embedPng(image.bytes);
+    }
+    const { width, height } = preserveOriginal ? embedded : image;
 
     const layout = getPageLayout(
       name,
-      image.width,
-      image.height,
+      width,
+      height,
       pageIndex,
       squareCoverCount,
-      pageNumbersEnabled
+      pageNumbersEnabled,
+      originalSizeCovers
     );
     const page = pdfDoc.addPage([layout.pageWidth, layout.pageHeight]);
     const placement = getImagePlacement(
-      image.width,
-      image.height,
+      width,
+      height,
       layout.fillPage,
       layout.pageWidth,
       layout.pageHeight
     );
-    page.drawImage(embedded, placement);
+    if (embedHighBitPng) {
+      const imageName = page.node.newXObject('Image', embedded.ref);
+      page.pushOperators(
+        PDFLib.pushGraphicsState(),
+        PDFLib.translate(placement.x, placement.y),
+        PDFLib.scale(placement.width, placement.height),
+        PDFLib.drawObject(imageName),
+        PDFLib.popGraphicsState()
+      );
+    } else {
+      page.drawImage(embedded, placement);
+    }
 
     // Invisible OCR text is pushed after the image and before the page number
     // so the image stays untouched and copied sentences keep their order.
     const textLayerItems = textLayerFont
       ? layoutOcrWords(ocrWordsByPage?.[pageIndex] || [], {
-          imageWidth: image.width,
-          imageHeight: image.height,
+          imageWidth: width,
+          imageHeight: height,
           placement,
         })
       : [];
@@ -200,8 +222,8 @@ async function buildWithPdfLib(
     onPageProcessed?.({
       pageIndex,
       name,
-      width: image.width,
-      height: image.height,
+      width,
+      height,
       pageWidth: layout.pageWidth,
       pageHeight: layout.pageHeight,
       pageKind: layout.kind,
@@ -224,6 +246,7 @@ export async function buildBookPdf(
     compress = false,
     title = 'Bindery PDF',
     squareCoverCount = DEFAULT_SQUARE_COVER_COUNT,
+    originalSizeCovers = false,
     pageNumbersEnabled = DEFAULT_PAGE_NUMBERS_ENABLED,
     searchableText = DEFAULT_SEARCHABLE_TEXT_ENABLED,
     recognizeWords = null,
@@ -246,10 +269,11 @@ export async function buildBookPdf(
     if (!canUseDirect) continue;
 
     const bytes = new Uint8Array(await file.arrayBuffer());
+    const preserveTransparency = originalSizeCovers && files.length <= normalizedSquareCoverCount;
     const parsed =
       bytes[0] === 0xff && bytes[1] === 0xd8
         ? parseDirectJpeg(bytes, name)
-        : parseDirectRgbPng(bytes, name);
+        : parseDirectRgbPng(bytes, name, { preserveTransparency });
     if (!parsed.supported) {
       canUseDirect = false;
       directImages.length = 0;
@@ -312,7 +336,8 @@ export async function buildBookPdf(
         image.height,
         index,
         normalizedSquareCoverCount,
-        pageNumbersEnabled
+        pageNumbersEnabled,
+        originalSizeCovers
       );
       const placement = getImagePlacement(
         image.width,
@@ -338,27 +363,13 @@ export async function buildBookPdf(
           image.height,
           index,
           normalizedSquareCoverCount,
-          pageNumbersEnabled
+          pageNumbersEnabled,
+          originalSizeCovers
         );
         return { width: layout.pageWidth, height: layout.pageHeight, kind: layout.kind };
       },
-      placementForPage: (width, height, index, pageSize) => {
-        const layout = getPageLayout(
-          directImages[index].name,
-          width,
-          height,
-          index,
-          normalizedSquareCoverCount,
-          pageNumbersEnabled
-        );
-        return getImagePlacement(
-          width,
-          height,
-          layout.fillPage,
-          pageSize.width,
-          pageSize.height
-        );
-      },
+      placementForPage: (width, height, _index, pageSize) =>
+        getImagePlacement(width, height, false, pageSize.width, pageSize.height),
       pageNumberForPage: (_image, index) =>
         getPageNumber(index, normalizedSquareCoverCount, pageNumbersEnabled),
       textLayerForPage: hasOcrWords ? (_image, index) => directTextLayers[index] : null,
@@ -370,6 +381,7 @@ export async function buildBookPdf(
   return buildWithPdfLib(files, PDFLib, {
     compress,
     squareCoverCount: normalizedSquareCoverCount,
+    originalSizeCovers,
     pageNumbersEnabled,
     ocrWordsByPage: hasOcrWords ? ocrWordsByPage : null,
     onPageProcessed,

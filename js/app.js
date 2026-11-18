@@ -3,7 +3,7 @@ import {
   buildBookPdf,
   DEFAULT_OCR_LANGUAGE,
   DEFAULT_SQUARE_COVER_COUNT,
-} from './pdf-builder.js?v=20260902-2';
+} from './pdf-builder.js?v=20261118-1';
 import { runPool } from './pool.js?v=20260901-1';
 import { extractImagesFromArchives } from './archive-extractor.js?v=20260906-2';
 import { prepareBookPages } from './book-pages.js?v=20260930-2';
@@ -61,6 +61,7 @@ const els = {
   settingsSummary: document.getElementById('settings-summary'),
   qualitySelect: document.getElementById('quality-select'),
   squareCoverCount: document.getElementById('square-cover-count'),
+  originalSizeCovers: document.getElementById('original-size-covers'),
   coversAtEnd: document.getElementById('covers-at-end'),
   pageNumbersEnabled: document.getElementById('page-numbers-enabled'),
   searchableTextEnabled: document.getElementById('searchable-text-enabled'),
@@ -247,7 +248,9 @@ function renderOutputSettings() {
 function updateSettingsSummary() {
   const parts = [els.qualitySelect.value === 'original' ? 'Original quality' : 'Compressed'];
   if (!els.excludeFirstPages.checked) {
-    parts.push(`${readSquareCoverCount()} covers`, els.coversAtEnd.checked ? 'covers at end' : 'folder order');
+    const count = readSquareCoverCount();
+    const size = count > 0 && els.originalSizeCovers.checked ? ' original-size' : '';
+    parts.push(`${count}${size} ${count === 1 ? 'cover' : 'covers'}`, els.coversAtEnd.checked ? 'covers at end' : 'folder order');
   }
   if (els.pageNumbersEnabled.checked) parts.push('page numbers');
   if (els.searchableTextEnabled.checked) parts.push('OCR');
@@ -258,6 +261,7 @@ function updateSettingsSummary() {
 function applyCurrentSettingsToBooks() {
   const excludeFirstPages = els.excludeFirstPages.checked;
   const squareCoverCount = excludeFirstPages ? 0 : readSquareCoverCount();
+  const originalSizeCovers = squareCoverCount > 0 && els.originalSizeCovers.checked;
   const quality = els.qualitySelect.value;
   const pageNumbersEnabled = els.pageNumbersEnabled.checked;
   const searchableTextEnabled = els.searchableTextEnabled.checked;
@@ -304,6 +308,7 @@ function applyCurrentSettingsToBooks() {
     const matches = keysMatch &&
       marker.imageCount === book.imageCount &&
       marker.squareCoverCount === squareCoverCount &&
+      Boolean(marker.originalSizeCovers) === originalSizeCovers &&
       marker.coversAtEnd === coversAtEnd &&
       marker.pageNumbersEnabled === pageNumbersEnabled &&
       marker.searchableTextEnabled === searchableTextEnabled &&
@@ -496,6 +501,7 @@ function renderSummary() {
   els.rescanBtn.disabled = isBusy;
   els.qualitySelect.disabled = isBusy;
   els.squareCoverCount.disabled = isBusy || els.excludeFirstPages.checked;
+  els.originalSizeCovers.disabled = isBusy || els.excludeFirstPages.checked || readSquareCoverCount() === 0;
   els.coversAtEnd.disabled = isBusy || els.excludeFirstPages.checked;
   els.pageNumbersEnabled.disabled = isBusy;
   els.searchableTextEnabled.disabled = isBusy;
@@ -855,7 +861,7 @@ async function writePdf(directory, name, bytes) {
 
 async function processOneBook(book, settings) {
   const {
-    qualityMode, squareCoverCount, coversAtEnd, pageNumbersEnabled,
+    qualityMode, squareCoverCount, originalSizeCovers, coversAtEnd, pageNumbersEnabled,
     searchableTextEnabled, recognizeWords, ocrConcurrency,
     outputHandle, outputLayout, previewEnabled, previewMode, previewManualCount,
     excludeFirstPages, excludedPageCount, reserveOutputNames, answerKeyMode,
@@ -878,6 +884,7 @@ async function processOneBook(book, settings) {
       compress: qualityMode === 'compressed',
       title: book.name,
       squareCoverCount: coverCount,
+      originalSizeCovers,
       pageNumbersEnabled,
       searchableText: searchableTextEnabled,
       recognizeWords,
@@ -945,6 +952,7 @@ async function processOneBook(book, settings) {
       pdfFile: pdfName,
       quality: qualityMode,
       squareCoverCount,
+      originalSizeCovers,
       coversAtEnd,
       pageNumbersEnabled,
       searchableTextEnabled,
@@ -1027,6 +1035,7 @@ async function processBooks(targetBooks) {
   const qualityMode = els.qualitySelect.value;
   const excludeFirstPages = els.excludeFirstPages.checked;
   const squareCoverCount = excludeFirstPages ? 0 : normalizeSquareCoverCount();
+  const originalSizeCovers = squareCoverCount > 0 && els.originalSizeCovers.checked;
   const coversAtEnd = excludeFirstPages ? false : els.coversAtEnd.checked;
   const pageNumbersEnabled = els.pageNumbersEnabled.checked;
   const searchableTextEnabled = els.searchableTextEnabled.checked;
@@ -1071,6 +1080,7 @@ async function processBooks(targetBooks) {
       await processOneBook(book, {
         qualityMode,
         squareCoverCount,
+        originalSizeCovers,
         coversAtEnd,
         pageNumbersEnabled,
         searchableTextEnabled,
@@ -1162,6 +1172,10 @@ els.excludedPageCount.addEventListener('change', () => {
 });
 els.squareCoverCount.addEventListener('change', normalizeSquareCoverCount);
 els.squareCoverCount.addEventListener('change', () => {
+  applyCurrentSettingsToBooks();
+  renderAll();
+});
+els.originalSizeCovers.addEventListener('change', () => {
   applyCurrentSettingsToBooks();
   renderAll();
 });

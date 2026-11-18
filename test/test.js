@@ -1,5 +1,5 @@
 import { naturalCompare } from '../js/natural-sort.js';
-import { scanBooks } from '../js/fs-scan.js?v=20260902-1';
+import { scanBooks, DONE_FORMAT_VERSION } from '../js/fs-scan.js';
 import { readImageForPdf } from '../js/image-io.js';
 import {
   buildBookPdf,
@@ -118,11 +118,12 @@ async function main() {
       imageCount: 1,
       pdfFile: 'Already-Done.pdf',
       squareCoverCount: 3,
+      coversAtEnd: true,
       pageNumbersEnabled: false,
       searchableTextEnabled: false,
       ocrLanguage: null,
       quality: 'original',
-      formatVersion: 5,
+      formatVersion: DONE_FORMAT_VERSION,
     })])
   );
 

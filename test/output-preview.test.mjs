@@ -87,6 +87,49 @@ const built = await PDFLib.PDFDocument.load(await buildBookPdf(prepared.images, 
 assert.equal(built.getPageCount(), 4);
 assert.deepEqual(built.getPage(0).getSize(), { width: 612, height: 792 });
 
+const originalSize = await PDFLib.PDFDocument.load(await buildBookPdf(imageHandles.slice(0, 4), PDFLib, {
+  originalSizeCovers: true,
+}));
+assert.deepEqual(originalSize.getPages().map((page) => page.getSize()), [
+  { width: 2, height: 3 }, { width: 2, height: 3 }, { width: 2, height: 3 }, { width: 612, height: 792 },
+]);
+
+// Cover pixels survive the compatibility path even when compression is on.
+// The 9 × 9 RGBA fixture uses all Adam7 passes and PNG row filters.
+const rgba16 = 'iVBORw0KGgoAAAANSUhEUgAAAAkAAAAJEAYAAAHHBurFAAAB30lEQVR4nG2QP2gUQRSH38zO7qx3vtv1jP0WJ5hCkSBRQoiHihy2FippFkwRQUVjimiTLQK2NnYq62EhV+kWKkTFS3Wo4MXCxj8ZTxOjZZJT73K7485mN3Bg9c3H773hNwOAv1z2SEoTv7tGObqpVfjRg/bktco+aIHZ7DwkDH+4+ow8zirwGgr2eoOU8J2bf9Y5zyAE0pAnMmoUV4U+IO/r/OoV7f3sbVqCZeBmdyIjOYWB2F1au6BWIF4hRfwkzEO9xxSkBxNQpRDFlFXlZNuhCsNYF9bo7z1H8JVr+e2nI/hS2Kx9bhRfuPbkxuYYzgv77cZdIPjTZy3Z1HDV0U/KKR1XfL0mBzguO0YhekKLsO6xuTAowpqnJVTe23aWHbY6yCDpMAdZp4AcxrpjXW6vZOX6y8qqdoCfvpWfn9mbg46nTctaDv56dDqqZU534DffmIrO5rAljAfRYB5bjvEh7O7Ery43wzeIwucj4Z0CLgl+Mbxk4ZLD74VjNn5xeTO0duFn36Q9wVR51ZWALJMhuUjUPw5B4nHn2KEc+2LiW/TSudRBzQVkPzZ8vPHneV+QLpL+C2LK/12czGmD/EwzV79ux28V2rhciOnSjynHo5hdxWMqp2neP5fkC/8ALh/8uS/bnVAAAAAASUVORK5CYII=';
+const transparentRgb = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAABnRSTlMAFAAgACtvN4lzAAAAD0lEQVR4nGMQUdA2cosCAANHATKjJNM9AAAAAElFTkSuQmCC';
+const coverFile = (name, base64) => ({
+  name,
+  handle: { async getFile() { return new File([Buffer.from(base64, 'base64')], name); } },
+});
+const covers = [coverFile('rgba16.png', rgba16), coverFile('transparent-rgb.png', transparentRgb)];
+const compressed = await PDFLib.PDFDocument.load(await buildBookPdf(covers, PDFLib, {
+  originalSizeCovers: true, compress: true,
+}));
+assert.deepEqual(compressed.getPages().map((page) => page.getSize()), [{ width: 9, height: 9 }, { width: 2, height: 1 }]);
+const imageFrom = (page) => page.node.Resources().lookup(PDFLib.PDFName.of('XObject')).values().map(
+  (ref) => page.doc.context.lookup(ref)
+)[0];
+const maskFrom = (image) => image.dict.lookup(PDFLib.PDFName.of('SMask'));
+const decoded = (image) => Buffer.from(PDFLib.decodePDFRawStream(image).decode());
+const rgbaImage = imageFrom(compressed.getPage(0));
+const rgbaMask = maskFrom(rgbaImage);
+for (const image of [rgbaImage, rgbaMask]) {
+  assert.equal(image.dict.lookup(PDFLib.PDFName.of('BitsPerComponent')).asNumber(), 16);
+}
+const colorSamples = decoded(rgbaImage);
+const alphaSamples = decoded(rgbaMask);
+for (let pixel = 0; pixel < 81; pixel += 1) {
+  assert.equal(colorSamples.readUInt16BE(pixel * 6), 256 * pixel + 13);
+  assert.equal(colorSamples.readUInt16BE(pixel * 6 + 2), 60000 - 192 * pixel);
+  assert.equal(colorSamples.readUInt16BE(pixel * 6 + 4), 1200 + 50 * pixel);
+  assert.equal(alphaSamples.readUInt16BE(pixel * 2), 65535 - 47 * pixel);
+}
+const transparent = await PDFLib.PDFDocument.load(await buildBookPdf([covers[1]], PDFLib, {
+  originalSizeCovers: true,
+}));
+assert.deepEqual(decoded(maskFrom(imageFrom(transparent.getPage(0)))), Buffer.from([0, 255]));
+
 function directory(name, files = []) {
   const children = new Map(files.map((file) => [file, { kind: 'file' }]));
   return {

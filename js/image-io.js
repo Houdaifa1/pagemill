@@ -50,11 +50,15 @@ async function compressBitmapToJpeg(bitmap, quality) {
   return new Uint8Array(await blob.arrayBuffer());
 }
 
-export async function readImageForPdf(file, { compress = false, quality = 0.85 } = {}) {
+export async function readImageForPdf(file, { compress = false, quality = 0.85, preserveOriginal = false } = {}) {
   const arrayBuffer = await file.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
   const ext = file.name.split('.').pop().toLowerCase();
   const isPngFile = ext === 'png' || isPng(bytes);
+  const type = isPngFile ? 'png' : 'jpg';
+
+  // The embedder reads the source dimensions and retains any PNG alpha.
+  if (preserveOriginal) return { type, bytes };
 
   const bitmap = await createImageBitmap(new Blob([bytes]));
   const width = bitmap.width;
@@ -73,5 +77,5 @@ export async function readImageForPdf(file, { compress = false, quality = 0.85 }
   }
 
   bitmap.close();
-  return { type: isPngFile ? 'png' : 'jpg', bytes, width, height };
+  return { type, bytes, width, height };
 }
