@@ -1,4 +1,4 @@
-import { addPreviewWatermarks, selectPreviewPageIndexes } from './preview.js?v=20261125-1';
+import { addPreviewWatermarks, selectPreviewPageIndexes } from './preview.js?v=20261125-2';
 
 function formNodes(fields, context, { PDFArray, PDFDict, PDFName }) {
   const nodes = new Set();
@@ -334,7 +334,7 @@ async function copyPreview(source, indexes, PDFLib) {
   if (retained.length) preview.catalog.set(key('AcroForm'), copier.copy(source.catalog.get(key('AcroForm'))));
   const layers = source.catalog.get(key('OCProperties'));
   if (layers) preview.catalog.set(key('OCProperties'), copier.copy(layers));
-  await addPreviewWatermarks(preview, PDFLib);
+  await addPreviewWatermarks(preview, PDFLib, { overAnnotations: true });
   return preview.save({ updateFieldAppearances: false });
 }
 

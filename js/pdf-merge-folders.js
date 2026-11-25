@@ -58,7 +58,7 @@ async function listFolder(directory, path, entries, order) {
   }
   const fullName = await findSaved((entry) => entry.sources === signature);
   const previewRequired = order.previewEnabled && coverFileCount < sourceFiles.length;
-  const previewKey = `preview-v1:${JSON.stringify([signature, coverFileCount, order.previewManualCount])}`;
+  const previewKey = `preview-v2:${JSON.stringify([signature, coverFileCount, order.previewManualCount])}`;
   const previewName = previewRequired && fullName
     ? await findSaved((entry) => entry.previewFor === fullName && entry.sources === previewKey)
     : null;

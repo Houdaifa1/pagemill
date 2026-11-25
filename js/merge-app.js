@@ -1,4 +1,4 @@
-import { savePdfFolder, scanPdfFolders } from './pdf-merge-folders.js';
+import { savePdfFolder, scanPdfFolders } from './pdf-merge-folders.js?v=20261125-2';
 
 const empty = document.getElementById('merge-empty');
 const library = document.getElementById('merge-library');
@@ -131,7 +131,7 @@ async function chooseFolder() {
 
 function mergeInWorker(files, options, path) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./merge-worker.js', import.meta.url), { type: 'module' });
+    const worker = new Worker(new URL('./merge-worker.js?v=20261125-2', import.meta.url), { type: 'module' });
     worker.onmessage = ({ data }) => {
       if (data.result || data.error) {
         worker.terminate();

@@ -30,7 +30,7 @@ export async function buildPreviewPdf(fullPdfBytes, pageIndexes, PDFLib) {
   return preview.save();
 }
 
-export async function addPreviewWatermarks(preview, PDFLib) {
+export async function addPreviewWatermarks(preview, PDFLib, { overAnnotations = false } = {}) {
   const font = await preview.embedFont(PDFLib.StandardFonts.HelveticaBold);
   for (const page of preview.getPages()) {
     const box = page.getCropBox();
@@ -39,6 +39,7 @@ export async function addPreviewWatermarks(preview, PDFLib) {
     const width = sideways ? box.height : box.width;
     const height = sideways ? box.width : box.height;
     const scale = Math.min(width / 612, height / 792);
+    const textOptions = [];
     for (const y of [15, 235, 455]) {
       const left = (width / 612) * 80;
       const bottom = (height / 792) * y;
@@ -48,7 +49,7 @@ export async function addPreviewWatermarks(preview, PDFLib) {
       if (rotation === 90) [x, rawY] = [box.x + box.width - bottom, box.y + left];
       if (rotation === 180) [x, rawY] = [box.x + box.width - left, box.y + box.height - bottom];
       if (rotation === 270) [x, rawY] = [box.x + bottom, box.y + box.height - left];
-      page.drawText('PREVIEW', {
+      textOptions.push({
         x,
         y: rawY,
         size: 98 * scale,
@@ -58,5 +59,77 @@ export async function addPreviewWatermarks(preview, PDFLib) {
         rotate: PDFLib.degrees(32 + rotation),
       });
     }
+    if (overAnnotations) {
+      // Viewers paint form widgets after the page stream. Repeat the vector
+      // overlay within their appearance boxes so it stays over opaque fields.
+      const { context } = preview;
+      const fontName = PDFLib.PDFName.of('PreviewFont');
+      const state = PDFLib.PDFName.of('PreviewOpacity');
+      const operators = textOptions.flatMap(({ rotate, ...options }) => PDFLib.drawText(font.encodeText('PREVIEW'), {
+        ...options, font: fontName, graphicsState: state, rotate, xSkew: PDFLib.degrees(0), ySkew: PDFLib.degrees(0),
+      }));
+      const watermark = context.register(context.formXObject(operators, {
+        BBox: [box.x, box.y, box.x + box.width, box.y + box.height],
+        Resources: { Font: { PreviewFont: font.ref }, ExtGState: { PreviewOpacity: { Type: 'ExtGState', ca: 0.24 } } },
+      }));
+      const name = page.node.newXObject('Preview', watermark);
+      page.pushOperators(PDFLib.drawObject(name));
+      stampAnnotationAppearances(page, watermark, PDFLib);
+    } else {
+      for (const options of textOptions) page.drawText('PREVIEW', options);
+    }
+  }
+}
+
+function stampAnnotationAppearances(page, watermark, PDFLib) {
+  const { PDFArray, PDFDict, PDFName, PDFStream, concatTransformationMatrix, drawObject,
+    popGraphicsState, pushGraphicsState, translate } = PDFLib;
+  const key = PDFName.of;
+  const { context } = page.doc;
+  for (const ref of page.node.Annots()?.asArray() || []) {
+    const annotation = context.lookupMaybe(ref, PDFDict);
+    const appearance = annotation?.lookupMaybe(key('AP'), PDFDict);
+    const rect = annotation?.lookupMaybe(key('Rect'), PDFArray)?.asRectangle();
+    if (!appearance || !rect || rect.width <= 0 || rect.height <= 0) continue;
+
+    const wrap = (value) => {
+      const stream = context.lookup(value);
+      if (!(stream instanceof PDFStream)) return value;
+      const bounds = stream.dict.lookupMaybe(key('BBox'), PDFArray)?.asRectangle();
+      if (!bounds) return value;
+      const matrix = stream.dict.lookupMaybe(key('Matrix'), PDFArray);
+      const [a, b, c, d, e, f] = matrix?.asArray().map((number) => number.asNumber()) || [1, 0, 0, 1, 0, 0];
+      const points = [bounds.x, bounds.x + bounds.width].flatMap((x) =>
+        [bounds.y, bounds.y + bounds.height].map((y) => [a * x + c * y + e, b * x + d * y + f]));
+      const xs = points.map(([x]) => x);
+      const ys = points.map(([, y]) => y);
+      const left = Math.min(...xs);
+      const bottom = Math.min(...ys);
+      const sx = rect.width / (Math.max(...xs) - left);
+      const sy = rect.height / (Math.max(...ys) - bottom);
+      if (!Number.isFinite(sx) || !Number.isFinite(sy)) return value;
+      return context.register(context.formXObject([
+        pushGraphicsState(), concatTransformationMatrix(sx, 0, 0, sy, -left * sx, -bottom * sy),
+        drawObject('Original'), popGraphicsState(),
+        pushGraphicsState(), translate(-rect.x, -rect.y), drawObject('Preview'), popGraphicsState(),
+      ], {
+        BBox: [0, 0, rect.width, rect.height],
+        Resources: { XObject: { Original: context.getObjectRef(stream) || context.register(stream), Preview: watermark } },
+      }));
+    };
+
+    const stamped = appearance.clone(context);
+    for (const state of ['N', 'R', 'D'].map(key)) {
+      const value = appearance.get(state);
+      const states = context.lookup(value);
+      if (states instanceof PDFDict) {
+        const stampedStates = states.clone(context);
+        for (const [name, stream] of states.entries()) stampedStates.set(name, wrap(stream));
+        stamped.set(state, stampedStates);
+      } else if (value) {
+        stamped.set(state, wrap(value));
+      }
+    }
+    annotation.set(key('AP'), stamped);
   }
 }

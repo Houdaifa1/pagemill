@@ -1,5 +1,5 @@
 import './pdf-lib.min.js?v=20260901-1';
-import { buildPdfMergeOutput } from './pdf-merge.js';
+import { buildPdfMergeOutput } from './pdf-merge.js?v=20261125-2';
 
 self.onmessage = async ({ data: { files, options } }) => {
   try {

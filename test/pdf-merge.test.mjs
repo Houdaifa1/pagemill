@@ -136,8 +136,16 @@ for (const [index, page] of preview.getPages().entries()) {
   sourceStreams.forEach((ref, stream) => {
     assert.deepEqual(preview.context.lookup(originalContents[stream]).getContents(), full.context.lookup(ref).getContents());
   });
-  const watermark = PDFLib.decodePDFRawStream(preview.context.lookup(contents.at(-1))).decode();
+  const resources = page.node.Resources().lookup(key('XObject'), PDFDict);
+  const [, mark] = resources.entries().find(([name]) => name.decodeText().startsWith('Preview'));
+  const watermark = PDFLib.decodePDFRawStream(preview.context.lookup(mark)).decode();
   assert.equal((new TextDecoder().decode(watermark).match(/<50524556494557> Tj/g) || []).length, 3);
+  const widget = preview.getForm().getTextField('student+2.Name').acroField.getWidgets()[index];
+  const appearance = preview.context.lookup(widget.getNormalAppearance());
+  const layers = appearance.dict.lookup(key('Resources'), PDFDict).lookup(key('XObject'), PDFDict);
+  assert.equal(layers.get(key('Preview')), mark, 'the widget appearance includes the above-field watermark');
+  const operators = new TextDecoder().decode(PDFLib.decodePDFRawStream(appearance).decode());
+  assert.ok(operators.indexOf('/Original Do') < operators.indexOf('/Preview Do'));
 }
 
 const longWorksheet = await PDFDocument.load(sourceBytes[1]);
