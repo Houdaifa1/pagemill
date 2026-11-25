@@ -56,6 +56,23 @@
           </label>
           <p id="merge-order-help">Cover and thumbnail filenames come first automatically.</p>
         </div>
+        <div class="merge-order-settings" role="group" aria-label="PDF preview">
+          <label class="merge-order-control">
+            <input id="merge-preview-enabled" type="checkbox" role="switch" aria-describedby="merge-preview-help" />
+            Create preview PDFs
+          </label>
+          <div id="merge-preview-options" hidden>
+            <div class="merge-order-control">
+              <label for="merge-preview-mode">Preview pages</label>
+              <select id="merge-preview-mode">
+                <option value="auto">Automatic (about 10%)</option>
+                <option value="manual">Choose a number</option>
+              </select>
+            </div>
+            <input id="merge-preview-count" type="number" min="3" step="1" value="3" inputmode="numeric" aria-label="Number of preview pages" hidden />
+          </div>
+          <p id="merge-preview-help">Save a separate watermarked sample with at least 3 worksheet pages when available. Covers and thumbnails are skipped.</p>
+        </div>
         <ul id="merge-folders" class="merge-folders"></ul>
         <p id="merge-no-folders" class="merge-no-folders" hidden>No folders contain two or more source PDFs.</p>
       </div>
@@ -75,6 +92,7 @@
           <summary></summary>
           <ol></ol>
         </details>
+        <p class="merge-folder-preview"></p>
         <p class="merge-folder-error"></p>
       </div>
       <div class="merge-folder-actions">

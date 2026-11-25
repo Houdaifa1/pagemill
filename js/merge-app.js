@@ -9,6 +9,10 @@ const mergeAll = document.getElementById('merge-all-pdfs');
 const coversAtEnd = document.getElementById('merge-covers-at-end');
 const coverCount = document.getElementById('merge-cover-count');
 const orderHelp = document.getElementById('merge-order-help');
+const previewEnabled = document.getElementById('merge-preview-enabled');
+const previewOptions = document.getElementById('merge-preview-options');
+const previewMode = document.getElementById('merge-preview-mode');
+const previewCount = document.getElementById('merge-preview-count');
 const list = document.getElementById('merge-folders');
 const libraryName = document.getElementById('merge-root-name');
 const count = document.getElementById('merge-count');
@@ -32,6 +36,11 @@ function renderFolders() {
   rescanButton.disabled = busy;
   coversAtEnd.disabled = busy;
   coverCount.disabled = busy || !coversAtEnd.checked;
+  previewEnabled.disabled = busy;
+  previewMode.disabled = busy;
+  previewCount.disabled = busy;
+  previewOptions.hidden = !previewEnabled.checked;
+  previewCount.hidden = previewMode.value !== 'manual';
   orderHelp.textContent = coversAtEnd.checked
     ? 'Count the cover and thumbnails together. Bindery moves that many PDFs from the end to the front.'
     : 'Cover and thumbnail filenames come first automatically.';
@@ -45,6 +54,8 @@ function renderFolders() {
     const row = rowTemplate.content.firstElementChild.cloneNode(true);
     row.querySelector('.merge-folder-path').textContent = book.path;
     row.querySelector('.merge-folder-error').textContent = book.error || '';
+    row.querySelector('.merge-folder-preview').textContent = book.previewName ? `Preview · ${book.previewName}` :
+      book.noWorksheetPreview ? 'No worksheet pages for a preview.' : '';
     const details = row.querySelector('details');
     details.hidden = !book.sources;
     if (book.sources) {
@@ -66,7 +77,7 @@ function renderFolders() {
     const action = row.querySelector('button');
     action.hidden = !book.sources;
     action.disabled = busy;
-    action.textContent = book.status === 'done' ? 'Redo PDF' : 'Merge PDF';
+    action.textContent = book.status === 'done' ? 'Redo PDF' : book.needsPreview ? 'Save preview' : 'Merge PDF';
     action.addEventListener('click', () => processFolders([book], book.status === 'done'));
     return row;
   }));
@@ -79,7 +90,12 @@ async function rescan() {
   status.textContent = 'Looking for PDFs…';
   renderFolders();
   try {
-    books = await scanPdfFolders(root, { coversAtEnd: coversAtEnd.checked, coverCount: coverCount.valueAsNumber });
+    books = await scanPdfFolders(root, {
+      coversAtEnd: coversAtEnd.checked,
+      coverCount: coverCount.valueAsNumber,
+      previewEnabled: previewEnabled.checked,
+      previewManualCount: previewMode.value === 'manual' ? previewCount.valueAsNumber : null,
+    });
   } catch (error) {
     errorMessage.textContent = `Could not read this folder. ${error.message}`;
   } finally {
@@ -89,10 +105,12 @@ async function rescan() {
   }
 }
 
-async function changeOrder({ currentTarget }) {
+async function changeSettings({ currentTarget }) {
   if (busy || !root) return;
-  const value = coverCount.valueAsNumber;
-  coverCount.value = String(Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 3);
+  for (const input of [coverCount, previewCount]) {
+    const value = input.valueAsNumber;
+    input.value = String(Number.isFinite(value) ? Math.max(Number(input.min), Math.floor(value)) : 3);
+  }
   await rescan();
   if (document.activeElement === document.body) currentTarget.focus();
 }
@@ -111,14 +129,14 @@ async function chooseFolder() {
   (mergeAll.disabled ? change : mergeAll).focus();
 }
 
-function mergeInWorker(files, path) {
+function mergeInWorker(files, options, path) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./merge-worker.js', import.meta.url), { type: 'module' });
     worker.onmessage = ({ data }) => {
-      if (data.bytes || data.error) {
+      if (data.result || data.error) {
         worker.terminate();
         if (data.error) reject(new Error(data.error));
-        else resolve(data.bytes);
+        else resolve(data.result);
         return;
       }
       status.textContent = `${path} · Reading PDF ${data.index + 1} of ${files.length} — ${data.name}`;
@@ -127,7 +145,7 @@ function mergeInWorker(files, path) {
       worker.terminate();
       reject(new Error('The PDF merger could not start. Reload the page and try again.'));
     };
-    worker.postMessage(files);
+    worker.postMessage({ files, options });
   });
 }
 
@@ -136,23 +154,24 @@ async function processFolders(targets, redo = false) {
   busy = true;
   errorMessage.textContent = '';
   let saved = 0;
+  let failed = 0;
   for (const book of targets) {
     book.status = 'processing';
     book.error = '';
     status.textContent = `Merging ${book.path}…`;
     renderFolders();
     try {
-      const save = () => savePdfFolder(book, (files) => mergeInWorker(files, book.path), { redo });
+      const save = () => savePdfFolder(book, (files, options) => mergeInWorker(files, options, book.path), { redo });
       const result = navigator.locks ? await navigator.locks.request('bindery-pdf-merge', save) : await save();
       Object.assign(book, result);
-      saved += 1;
+      saved += result.outputsSaved || 0;
     } catch (error) {
+      failed += 1;
       book.status = 'error';
       book.error = error.message;
     }
   }
   busy = false;
-  const failed = targets.length - saved;
   const result = `${saved} ${saved === 1 ? 'PDF' : 'PDFs'} saved beside the source files.`;
   status.textContent = failed ? `${result} ${failed} ${failed === 1 ? 'folder needs' : 'folders need'} attention.` : result;
   renderFolders();
@@ -161,8 +180,9 @@ async function processFolders(targets, redo = false) {
 choose.addEventListener('click', chooseFolder);
 change.addEventListener('click', chooseFolder);
 rescanButton.addEventListener('click', rescan);
-coversAtEnd.addEventListener('change', changeOrder);
-coverCount.addEventListener('change', changeOrder);
+for (const option of [coversAtEnd, coverCount, previewEnabled, previewMode, previewCount]) {
+  option.addEventListener('change', changeSettings);
+}
 mergeAll.addEventListener('click', () => processFolders(books.filter((book) => book.status === 'pending')));
 if (!folderAccess) errorMessage.textContent = 'Open Bindery in Chrome or Edge to choose folders and save merged PDFs beside your worksheets.';
 renderFolders();

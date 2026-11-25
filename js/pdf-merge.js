@@ -1,3 +1,5 @@
+import { addPreviewWatermarks, selectPreviewPageIndexes } from './preview.js?v=20261125-1';
+
 function formNodes(fields, context, { PDFArray, PDFDict, PDFName }) {
   const nodes = new Set();
   const pending = fields?.asArray() || [];
@@ -189,13 +191,14 @@ function copyPageLinks(annotation, destinations, copier, { PDFArray, PDFDict, PD
   if (target instanceof PDFArray) copier.copy(container).set(entry, copier.copy(target));
 }
 
-export async function mergePdfFiles(files, PDFLib, onProgress = () => {}) {
+async function assemblePdf(files, PDFLib, onProgress, coverFileCount = 0) {
   if (files.length < 2) throw new Error('Choose at least two PDFs.');
   const { PDFArray, PDFDict, PDFDocument, PDFInvalidObject, PDFName, PDFObjectCopier, PDFPage, PDFPageLeaf } = PDFLib;
   const key = PDFName.of;
   const output = await PDFDocument.create();
   const outputForm = output.context.obj({ Fields: [], DR: {}, CO: [] });
   const usedRootNames = new Set();
+  let coverPageCount = 0;
   output.setCreator('Bindery');
 
   for (const [index, file] of files.entries()) {
@@ -234,6 +237,7 @@ export async function mergePdfFiles(files, PDFLib, onProgress = () => {}) {
 
       const pages = source.getPages();
       if (!pages.length) throw new Error('contains no pages.');
+      if (index < coverFileCount) coverPageCount += pages.length;
       const copier = PDFObjectCopier.for(source.context, output.context);
       const layers = source.catalog.lookupMaybe(key('OCProperties'), PDFDict);
       if (layers) mergeLayers(layers, output, copier, PDFLib);
@@ -263,5 +267,84 @@ export async function mergePdfFiles(files, PDFLib, onProgress = () => {}) {
     if (!outputForm.lookup(key('CO'), PDFArray).size()) outputForm.delete(key('CO'));
     output.catalog.set(key('AcroForm'), output.context.register(outputForm));
   }
+  return { output, coverPageCount };
+}
+
+export async function mergePdfFiles(files, PDFLib, onProgress = () => {}) {
+  const { output } = await assemblePdf(files, PDFLib, onProgress);
   return output.save({ updateFieldAppearances: false });
+}
+
+// Work on the staged document only after the full PDF has been saved. Prune
+// form widgets from omitted pages so a shared field cannot pull those pages
+// into the preview when the selected pages are copied.
+async function copyPreview(source, indexes, PDFLib) {
+  const { PDFArray, PDFDict, PDFDocument, PDFName, PDFObjectCopier, PDFPage, PDFPageLeaf } = PDFLib;
+  const key = PDFName.of;
+  const pages = indexes.map((index) => source.getPage(index));
+  const selected = new Set(pages.map((page) => page.ref));
+  const widgets = new Set();
+  for (const page of pages) {
+    for (const ref of page.node.Annots()?.asArray() || []) {
+      const annotation = source.context.lookupMaybe(ref, PDFDict);
+      if (!annotation) continue;
+      if (annotation.get(key('Subtype')) === key('Widget')) widgets.add(annotation);
+      const action = annotation.lookupMaybe(key('A'), PDFDict);
+      const localAction = action?.get(key('S')) === key('GoTo');
+      const owner = localAction ? action : annotation;
+      const entry = localAction ? key('D') : key('Dest');
+      const destination = owner.lookup(entry);
+      if (destination instanceof PDFArray && !selected.has(destination.get(0))) {
+        if (localAction) annotation.delete(key('A'));
+        else annotation.delete(entry);
+      }
+    }
+  }
+
+  const form = source.catalog.lookupMaybe(key('AcroForm'), PDFDict);
+  const roots = form?.lookupMaybe(key('Fields'), PDFArray);
+  const kept = new Map();
+  const prune = (ref) => {
+    const field = source.context.lookup(ref, PDFDict);
+    if (kept.has(field)) return kept.get(field);
+    kept.set(field, false);
+    const kids = field.lookupMaybe(key('Kids'), PDFArray);
+    const children = kids?.asArray().filter(prune) || [];
+    const keep = widgets.has(field) || children.length > 0;
+    if (keep && kids) field.set(key('Kids'), source.context.obj(children));
+    kept.set(field, keep);
+    return keep;
+  };
+  const retained = roots?.asArray().filter(prune) || [];
+  if (retained.length) {
+    form.set(key('Fields'), source.context.obj(retained));
+    const order = form.lookupMaybe(key('CO'), PDFArray);
+    if (order) form.set(key('CO'), source.context.obj(order.asArray().filter((ref) => kept.get(source.context.lookup(ref)))));
+  }
+
+  for (const page of source.getPages()) {
+    if (!selected.has(page.ref)) source.context.delete(page.ref);
+  }
+  const preview = await PDFDocument.create();
+  const copier = PDFObjectCopier.for(source.context, preview.context);
+  for (const page of pages) {
+    const ref = copier.copy(page.ref);
+    preview.addPage(PDFPage.of(preview.context.lookup(ref, PDFPageLeaf), ref, preview));
+  }
+  if (retained.length) preview.catalog.set(key('AcroForm'), copier.copy(source.catalog.get(key('AcroForm'))));
+  const layers = source.catalog.get(key('OCProperties'));
+  if (layers) preview.catalog.set(key('OCProperties'), copier.copy(layers));
+  await addPreviewWatermarks(preview, PDFLib);
+  return preview.save({ updateFieldAppearances: false });
+}
+
+export async function buildPdfMergeOutput(files, PDFLib, {
+  includeFull = true, createPreview = false, coverFileCount = 0, previewManualCount = null,
+} = {}, onProgress = () => {}) {
+  const { output, coverPageCount } = await assemblePdf(files, PDFLib, onProgress, coverFileCount);
+  const pdfBytes = includeFull ? await output.save({ updateFieldAppearances: false }) : null;
+  const manualCount = previewManualCount === null ? null : Math.max(3, Math.floor(Number(previewManualCount) || 3));
+  const indexes = createPreview ? selectPreviewPageIndexes(output.getPageCount(), coverPageCount, manualCount) : [];
+  const previewBytes = indexes.length ? await copyPreview(output, indexes, PDFLib) : null;
+  return { pdfBytes, previewBytes };
 }

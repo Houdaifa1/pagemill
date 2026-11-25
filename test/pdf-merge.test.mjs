@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mergePdfFiles } from '../js/pdf-merge.js';
+import { buildPdfMergeOutput, mergePdfFiles } from '../js/pdf-merge.js';
 import { savePdfFolder, scanPdfFolders } from '../js/pdf-merge-folders.js';
 import { loadPdfLib } from './load-pdf-lib.mjs';
 
 const PDFLib = loadPdfLib();
 const { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFString, degrees } = PDFLib;
 const key = PDFName.of;
+const buildOutputs = (files, options) => buildPdfMergeOutput(files, PDFLib, options);
 
 async function editablePdf({ width, height, text, fontName, secondPage = false }) {
   const pdf = await PDFDocument.create();
@@ -114,6 +115,54 @@ const edited = (await PDFDocument.load(await merged.save())).getForm();
 assert.equal(edited.getTextField('student.Name').getText(), 'Cover Name');
 assert.equal(edited.getTextField('student+2.Name').getText(), 'Edited after merging');
 
+const longCover = await PDFDocument.load(sourceBytes[0]);
+longCover.addPage([300, 200]);
+const previewSources = [new File([await longCover.save()], 'Cover.pdf'), files[1]];
+const { pdfBytes, previewBytes } = await buildOutputs(previewSources, { createPreview: true, coverFileCount: 1 });
+const full = await PDFDocument.load(pdfBytes);
+const preview = await PDFDocument.load(previewBytes);
+assert.equal(full.getPageCount(), 4);
+assert.equal(full.getForm().getTextField('student.Name').getText(), 'Cover Name');
+assert.deepEqual(preview.getPages().map((page) => page.getSize()), full.getPages().slice(2).map((page) => page.getSize()),
+  'all pages of a multi-page cover are excluded');
+assert.equal(preview.getPage(1).getRotation().angle, 90);
+assert.deepEqual(preview.getPage(1).getCropBox(), full.getPage(3).getCropBox());
+assert.equal(preview.getForm().getFieldMaybe('student.Name'), undefined);
+assert.equal(preview.getForm().getTextField('student+2.Name').getText(), 'Worksheet Name');
+for (const [index, page] of preview.getPages().entries()) {
+  const sourceStreams = full.getPage(index + 2).node.Contents()?.asArray() || [];
+  const contents = page.node.Contents().asArray();
+  const originalContents = contents.slice(1, -2); // pdf-lib wraps the original streams in q/Q
+  sourceStreams.forEach((ref, stream) => {
+    assert.deepEqual(preview.context.lookup(originalContents[stream]).getContents(), full.context.lookup(ref).getContents());
+  });
+  const watermark = PDFLib.decodePDFRawStream(preview.context.lookup(contents.at(-1))).decode();
+  assert.equal((new TextDecoder().decode(watermark).match(/<50524556494557> Tj/g) || []).length, 3);
+}
+
+const longWorksheet = await PDFDocument.load(sourceBytes[1]);
+longWorksheet.addPage([500, 500]);
+longWorksheet.addPage([550, 550]);
+const sample = await buildOutputs([previewSources[0], new File([await longWorksheet.save()], 'Worksheets.pdf')],
+  { includeFull: false, createPreview: true, coverFileCount: 1, previewManualCount: 1 });
+assert.equal(sample.pdfBytes, null);
+const partialPreview = await PDFDocument.load(sample.previewBytes);
+assert.equal(partialPreview.getPageCount(), 3, 'manual counts below three are raised to three');
+assert.equal(partialPreview.context.enumerateIndirectObjects().filter(([, object]) => object instanceof PDFLib.PDFPageLeaf).length, 3,
+  'a link or a shared field does not copy an unsampled page into the preview');
+const previewWidgets = partialPreview.getForm().getTextField('student+2.Name').acroField.getWidgets();
+assert.equal(previewWidgets.length, partialPreview.getPages().filter((page) => page.getWidth() !== 500 && page.getWidth() !== 550).length);
+assert.ok(previewWidgets.every((widget) => partialPreview.getPages().some((page) => page.ref === widget.P())));
+
+const manyWorksheets = await PDFDocument.create();
+for (let index = 0; index < 50; index++) manyWorksheets.addPage([612, 740 + index]);
+const auto = await buildOutputs([files[0], new File([await manyWorksheets.save()], 'Worksheet.pdf')],
+  { includeFull: false, createPreview: true, coverFileCount: 1 });
+const autoHeights = (await PDFDocument.load(auto.previewBytes)).getPages().map((page) => page.getHeight());
+assert.equal(autoHeights.length, 5, 'automatic mode samples 10% of worksheet pages');
+assert.ok(autoHeights.every((height) => height >= 740));
+assert.deepEqual(autoHeights, [...new Set(autoHeights)].sort((a, b) => a - b));
+
 await assert.rejects(() => mergePdfFiles([files[0]], PDFLib), /at least two PDFs/);
 await assert.rejects(() => mergePdfFiles([files[0], new File(['not a PDF'], 'Broken.pdf')], PDFLib), /Broken\.pdf could not be opened/);
 
@@ -183,7 +232,7 @@ assert.equal(books[0].sources[0].name, 'Unit 1 Cover.pdf');
 assert.ok(books[0].sources.findIndex(({ name }) => name === 'Worksheet 2.pdf') <
   books[0].sources.findIndex(({ name }) => name === 'Worksheet 10.pdf'));
 const existing = await (await folder.getFileHandle('Unit 1 - Merged.pdf')).getFile();
-const saved = await savePdfFolder(books[0], (sources) => mergePdfFiles(sources, PDFLib));
+const saved = await savePdfFolder(books[0], buildOutputs);
 assert.equal(saved.name, 'Unit 1 - Merged - 2.pdf');
 assert.equal((await (await folder.getFileHandle(saved.name)).getFile()).size > 0, true);
 assert.equal(await (await folder.getFileHandle(existing.name)).getFile(), existing, 'source PDF is unchanged');
@@ -195,7 +244,7 @@ assert.equal(books[1].status, 'pending');
 await savePdfFolder(books[0], () => assert.fail('already saved folders are skipped'));
 
 await put(folder, saved.name, 'an edited copy of the last merged result');
-const rebuilt = await savePdfFolder(books[0], (sources) => mergePdfFiles(sources, PDFLib), { redo: true });
+const rebuilt = await savePdfFolder(books[0], buildOutputs, { redo: true });
 assert.equal(rebuilt.name, 'Unit 1 - Merged - 3.pdf');
 assert.equal(await (await (await folder.getFileHandle(saved.name)).getFile()).text(), 'an edited copy of the last merged result');
 await put(folder, 'Worksheet 2.pdf', sourceBytes[0]);
@@ -210,16 +259,16 @@ const trailingNames = ['Worksheet 2.pdf', 'Worksheet 10.pdf', 'Y Front.pdf', 'Z 
 for (const [index, name] of trailingNames.entries()) await put(endFolder, name, sourceBytes[index === 2 ? 0 : 1]);
 const endBook = (rows) => rows.find((row) => row.directory === endFolder);
 const standard = endBook(await scanPdfFolders(library));
-await savePdfFolder(standard, (sources) => mergePdfFiles(sources, PDFLib));
+await savePdfFolder(standard, buildOutputs);
 
 const options = { coversAtEnd: true, coverCount: 3 };
 const reordered = endBook(await scanPdfFolders(library, options));
 const expected = [...trailingNames.slice(-3), ...trailingNames.slice(0, -3)];
 assert.deepEqual(reordered.sources.map(({ name }) => name), expected);
 assert.equal(reordered.status, 'pending', 'an output saved in a different order is ready to rebuild');
-await savePdfFolder(reordered, (sources) => {
+await savePdfFolder(reordered, (sources, options) => {
   assert.deepEqual(sources.map(({ name }) => name), expected, 'save uses the order shown in the list');
-  return mergePdfFiles(sources, PDFLib);
+  return buildOutputs(sources, options);
 });
 assert.equal(endBook(await scanPdfFolders(library, options)).status, 'done');
 assert.equal(endBook(await scanPdfFolders(library)).status, 'done', 'a saved version for the previous order is still available');
@@ -231,5 +280,25 @@ const namedSources = ['Z Front Cover.pdf', 'Y Cover thumb1.pdf', 'Y Thumbnail 2.
 for (const name of namedSources.toReversed()) await put(namedFolder, name, sourceBytes[0]);
 assert.deepEqual((await scanPdfFolders(library)).find((row) => row.directory === namedFolder).sources.map(({ name }) => name),
   namedSources, 'recognized covers and thumbnails come first by default');
+
+const readSaved = async (directory, name) => (await directory.getFileHandle(name)).getFile();
+const previewSettings = { ...options, previewEnabled: true };
+const needsPreview = endBook(await scanPdfFolders(library, previewSettings));
+const fullFile = await readSaved(endFolder, needsPreview.name);
+assert.equal(needsPreview.needsPreview, true);
+const output = await savePdfFolder(needsPreview, buildOutputs);
+assert.equal(output.outputsSaved, 1);
+assert.equal(await readSaved(endFolder, needsPreview.name), fullFile, 'adding a preview never rewrites an existing full PDF');
+assert.equal(output.previewName, needsPreview.name.replace(/\.pdf$/, ' - Preview.pdf'));
+const result = endBook(await scanPdfFolders(library, previewSettings));
+assert.equal(result.status, 'done');
+assert.equal(result.sources.length, trailingNames.length, 'saved previews never become source PDFs');
+
+const allCovers = { coversAtEnd: true, coverCount: 100, previewEnabled: true };
+const coverBook = endBook(await scanPdfFolders(library, allCovers));
+const noSample = await savePdfFolder(coverBook, buildOutputs);
+assert.equal(noSample.noWorksheetPreview, true);
+assert.equal(noSample.previewName, null);
+assert.equal(endBook(await scanPdfFolders(library, allCovers)).status, 'done');
 
 console.log('PDF merge QA passed: original content, editable fields, nested saves, and cover and thumbnail order.');

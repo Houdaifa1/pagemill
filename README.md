@@ -23,6 +23,11 @@ so existing copies with filled answers are protected. All source pages keep thei
 original order within each PDF, dimensions, and content. Standard PDF form
 fields stay editable and retain their current values. Duplicate field names in
 different files are made unique so one worksheet's answers do not populate another.
+Turn on **Create preview PDFs** to save a separate watermarked sample beside the
+full PDF. Automatic mode takes about 10% of the worksheet pages. Both automatic
+and manual counts use at least three pages when available. Covers and thumbnails
+are excluded. The sampled pages keep their original dimensions, content, and
+fillable fields. An existing full PDF can be kept while Bindery adds its preview.
 Signed, password-protected, and XFA PDFs require their original document. Bindery
 also flags scripts that would lose their original scope in the merged file. The
 files stay on your device.

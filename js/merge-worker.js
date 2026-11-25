@@ -1,12 +1,13 @@
 import './pdf-lib.min.js?v=20260901-1';
-import { mergePdfFiles } from './pdf-merge.js';
+import { buildPdfMergeOutput } from './pdf-merge.js';
 
-self.onmessage = async ({ data: files }) => {
+self.onmessage = async ({ data: { files, options } }) => {
   try {
-    const bytes = await mergePdfFiles(files, self.PDFLib, (index, name) => {
+    const result = await buildPdfMergeOutput(files, self.PDFLib, options, (index, name) => {
       self.postMessage({ index, name });
     });
-    self.postMessage({ bytes }, [bytes.buffer]);
+    const buffers = Object.values(result).filter(Boolean).map((bytes) => bytes.buffer);
+    self.postMessage({ result }, buffers);
   } catch (error) {
     self.postMessage({ error: error.message });
   }

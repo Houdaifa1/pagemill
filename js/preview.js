@@ -25,22 +25,38 @@ export async function buildPreviewPdf(fullPdfBytes, pageIndexes, PDFLib) {
   const fullPdf = await PDFLib.PDFDocument.load(fullPdfBytes);
   const preview = await PDFLib.PDFDocument.create();
   const pages = await preview.copyPages(fullPdf, pageIndexes);
+  for (const page of pages) preview.addPage(page);
+  await addPreviewWatermarks(preview, PDFLib);
+  return preview.save();
+}
+
+export async function addPreviewWatermarks(preview, PDFLib) {
   const font = await preview.embedFont(PDFLib.StandardFonts.HelveticaBold);
-  for (const page of pages) {
-    preview.addPage(page);
-    const { width, height } = page.getSize();
+  for (const page of preview.getPages()) {
+    const box = page.getCropBox();
+    const rotation = (page.getRotation().angle % 360 + 360) % 360;
+    const sideways = rotation === 90 || rotation === 270;
+    const width = sideways ? box.height : box.width;
+    const height = sideways ? box.width : box.height;
     const scale = Math.min(width / 612, height / 792);
     for (const y of [15, 235, 455]) {
+      const left = (width / 612) * 80;
+      const bottom = (height / 792) * y;
+      // Place the marks in the visible crop box and orient them as read.
+      let x = box.x + left;
+      let rawY = box.y + bottom;
+      if (rotation === 90) [x, rawY] = [box.x + box.width - bottom, box.y + left];
+      if (rotation === 180) [x, rawY] = [box.x + box.width - left, box.y + box.height - bottom];
+      if (rotation === 270) [x, rawY] = [box.x + bottom, box.y + box.height - left];
       page.drawText('PREVIEW', {
-        x: (width / 612) * 80,
-        y: (height / 792) * y,
+        x,
+        y: rawY,
         size: 98 * scale,
         font,
         color: PDFLib.rgb(0.13, 0.18, 0.28),
         opacity: 0.24,
-        rotate: PDFLib.degrees(32),
+        rotate: PDFLib.degrees(32 + rotation),
       });
     }
   }
-  return preview.save();
 }
