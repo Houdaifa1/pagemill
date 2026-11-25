@@ -6,6 +6,9 @@ const choose = document.getElementById('choose-pdf-folder');
 const change = document.getElementById('change-pdf-folder');
 const rescanButton = document.getElementById('rescan-pdf-folders');
 const mergeAll = document.getElementById('merge-all-pdfs');
+const coversAtEnd = document.getElementById('merge-covers-at-end');
+const coverCount = document.getElementById('merge-cover-count');
+const orderHelp = document.getElementById('merge-order-help');
 const list = document.getElementById('merge-folders');
 const libraryName = document.getElementById('merge-root-name');
 const count = document.getElementById('merge-count');
@@ -27,6 +30,11 @@ function renderFolders() {
   choose.disabled = busy || !folderAccess;
   change.disabled = busy;
   rescanButton.disabled = busy;
+  coversAtEnd.disabled = busy;
+  coverCount.disabled = busy || !coversAtEnd.checked;
+  orderHelp.textContent = coversAtEnd.checked
+    ? 'Count the cover and thumbnails together. Bindery moves that many PDFs from the end to the front.'
+    : 'Cover and thumbnail filenames come first automatically.';
   const pending = books.filter((book) => book.status === 'pending').length;
   const saved = books.filter((book) => book.status === 'done').length;
   mergeAll.disabled = busy || pending === 0;
@@ -71,7 +79,7 @@ async function rescan() {
   status.textContent = 'Looking for PDFs…';
   renderFolders();
   try {
-    books = await scanPdfFolders(root);
+    books = await scanPdfFolders(root, { coversAtEnd: coversAtEnd.checked, coverCount: coverCount.valueAsNumber });
   } catch (error) {
     errorMessage.textContent = `Could not read this folder. ${error.message}`;
   } finally {
@@ -79,6 +87,14 @@ async function rescan() {
     status.textContent = '';
     renderFolders();
   }
+}
+
+async function changeOrder({ currentTarget }) {
+  if (busy || !root) return;
+  const value = coverCount.valueAsNumber;
+  coverCount.value = String(Number.isFinite(value) ? Math.max(1, Math.floor(value)) : 3);
+  await rescan();
+  if (document.activeElement === document.body) currentTarget.focus();
 }
 
 async function chooseFolder() {
@@ -145,6 +161,8 @@ async function processFolders(targets, redo = false) {
 choose.addEventListener('click', chooseFolder);
 change.addEventListener('click', chooseFolder);
 rescanButton.addEventListener('click', rescan);
+coversAtEnd.addEventListener('change', changeOrder);
+coverCount.addEventListener('change', changeOrder);
 mergeAll.addEventListener('click', () => processFolders(books.filter((book) => book.status === 'pending')));
 if (!folderAccess) errorMessage.textContent = 'Open Bindery in Chrome or Edge to choose folders and save merged PDFs beside your worksheets.';
 renderFolders();

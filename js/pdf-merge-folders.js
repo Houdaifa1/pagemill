@@ -1,8 +1,11 @@
 import { naturalCompare } from './natural-sort.js?v=20260901-1';
 import { chooseFlatOutputPdfName, isSafePdfName } from './output-name.js?v=20260930-1';
+import { orderPagesForBook } from './page-order.js?v=20260907-1';
 
 const MANIFEST = '.bindery-pdf-merge.json';
 const isCover = (name) => /(?:^|[ ._-])cover(?:[ ._-]|$)/i.test(name) && !/(?:^|[ ._-])back[ ._-]+cover/i.test(name);
+const isThumbnail = (name) => /(?:^|[ ._-])thumb(?:nail)?s?(?:[ ._-]|\d|$)/i.test(name);
+const frontMatterRank = (name) => isThumbnail(name) ? 1 : isCover(name) ? 0 : 2;
 const isSubfolder = ([name, handle]) => handle.kind === 'directory' && !name.startsWith('.') && name !== '__MACOSX';
 
 async function folderEntries(directory) {
@@ -11,7 +14,7 @@ async function folderEntries(directory) {
   return entries;
 }
 
-async function listFolder(directory, path, entries) {
+async function listFolder(directory, path, entries, order) {
   const files = entries.filter(([name, handle]) => handle.kind === 'file' && !name.startsWith('.') && /\.pdf$/i.test(name));
   const marker = entries.find(([name]) => name === MANIFEST)?.[1];
   let outputs = [];
@@ -29,8 +32,13 @@ async function listFolder(directory, path, entries) {
   const outputNames = new Set(outputs.map(({ name }) => name.toLowerCase()));
   const inputs = files.filter(([name]) => !outputNames.has(name.toLowerCase()));
   const byName = new Map(files);
-  inputs.sort(([a], [b]) => Number(isCover(b)) - Number(isCover(a)) || naturalCompare(a.toLowerCase(), b.toLowerCase()));
-  const sourceFiles = await Promise.all(inputs.map(async ([name, handle]) => {
+  inputs.sort(([a], [b]) => order.coversAtEnd ? naturalCompare(a, b) :
+    frontMatterRank(a) - frontMatterRank(b) || naturalCompare(a.toLowerCase(), b.toLowerCase()));
+  const ordered = orderPagesForBook(inputs, {
+    coversAtEnd: order.coversAtEnd,
+    squareCoverCount: order.coverCount,
+  });
+  const sourceFiles = await Promise.all(ordered.map(async ([name, handle]) => {
     try {
       return await handle.getFile();
     } catch (error) {
@@ -48,20 +56,21 @@ async function listFolder(directory, path, entries) {
   }
   const name = latest || chooseFlatOutputPdfName(`${directory.name} - Merged`, byName.keys());
   return {
-    book: { directory, path, name, sources: sourceFiles, status: latest ? 'done' : 'pending' },
+    book: { directory, path, order, name, sources: sourceFiles, status: latest ? 'done' : 'pending' },
     outputs,
     signature,
     names: byName.keys(),
   };
 }
 
-export async function scanPdfFolders(root) {
+export async function scanPdfFolders(root, { coversAtEnd = false, coverCount = 3 } = {}) {
   const books = [];
+  const order = { coversAtEnd, coverCount };
   async function walk(directory, path) {
     let entries = [];
     try {
       entries = await folderEntries(directory);
-      const folder = await listFolder(directory, path, entries);
+      const folder = await listFolder(directory, path, entries, order);
       if (folder.book.sources.length >= 2) books.push(folder.book);
     } catch (error) {
       books.push({ directory, path, status: 'error', error: error.message });
@@ -85,15 +94,15 @@ async function writeFolderFile(directory, name, data) {
 }
 
 export async function savePdfFolder(book, merge, { redo = false } = {}) {
-  const { directory, path } = book;
-  const current = await listFolder(directory, path, await folderEntries(directory));
+  const { directory, path, order } = book;
+  const current = await listFolder(directory, path, await folderEntries(directory), order);
   if (current.book.sources.length < 2) throw new Error('At least two source PDFs are needed in this folder.');
   if (!redo && current.book.status === 'done') return current.book;
   const bytes = await merge(current.book.sources);
 
   // Recheck the inputs and filenames before writing. Preparing a new output
   // never replaces an earlier fillable result, which may now contain answers.
-  const latest = await listFolder(directory, path, await folderEntries(directory));
+  const latest = await listFolder(directory, path, await folderEntries(directory), order);
   if (latest.signature !== current.signature) throw new Error('Source PDFs changed during the merge. Rescan and try again.');
   const name = chooseFlatOutputPdfName(`${directory.name} - Merged`, latest.names);
   const previous = latest.outputs.filter((entry) => entry.name !== name);

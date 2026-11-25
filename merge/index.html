@@ -45,6 +45,17 @@
           <button id="rescan-pdf-folders" class="merge-secondary" type="button">Rescan</button>
           <button id="merge-all-pdfs" class="merge-primary" type="button">Merge all pending</button>
         </div>
+        <div class="merge-order-settings" role="group" aria-label="PDF order">
+          <label class="merge-order-control">
+            <input id="merge-covers-at-end" type="checkbox" role="switch" aria-describedby="merge-order-help" />
+            Covers at end
+          </label>
+          <label class="merge-order-control">
+            Cover count
+            <input id="merge-cover-count" type="number" min="1" step="1" value="3" inputmode="numeric" aria-describedby="merge-order-help" disabled />
+          </label>
+          <p id="merge-order-help">Cover and thumbnail filenames come first automatically.</p>
+        </div>
         <ul id="merge-folders" class="merge-folders"></ul>
         <p id="merge-no-folders" class="merge-no-folders" hidden>No folders contain two or more source PDFs.</p>
       </div>

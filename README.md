@@ -12,8 +12,11 @@ database. The browser reads and writes the folder you choose.
 ## Use it
 
 Choose **Merge PDFs**, then **Choose folder** to select a library in Chrome or Edge.
-Each folder with at least two source PDFs becomes one result. Files named like
-`Cover.pdf` come first, followed by the remaining filenames in natural order.
+Each folder with at least two source PDFs becomes one result. Recognizable cover
+and thumbnail names come first by default, followed by the worksheets in natural
+filename order. If your cover and thumbnails are the last files, turn on **Covers
+at end** and set **Cover count** to their total. Bindery moves the last PDFs to the
+front in their existing order, just as it does for images.
 Choose **Merge all pending** or merge an individual folder. Bindery saves
 `Folder name - Merged.pdf` beside the source files. Rebuilding gets a new filename,
 so existing copies with filled answers are protected. All source pages keep their

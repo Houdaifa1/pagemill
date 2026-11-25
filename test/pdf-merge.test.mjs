@@ -205,4 +205,31 @@ assert.equal(books[0].status, 'pending', 'edited sources are ready to merge agai
 await assert.rejects(savePdfFolder(books[1], () => { throw new Error('Broken source'); }), /Broken source/);
 assert.equal((await scanPdfFolders(library))[1].status, 'pending', 'failed merges leave sources and outputs alone');
 
-console.log('PDF merge QA passed: original geometry and content, editable forms, shared widgets, nested folders, and safe adjacent saves.');
+const endFolder = library.add(directory('Trailing cover and thumbnails'));
+const trailingNames = ['Worksheet 2.pdf', 'Worksheet 10.pdf', 'Y Front.pdf', 'Z Detail 1.pdf', 'Z Detail 2.pdf'];
+for (const [index, name] of trailingNames.entries()) await put(endFolder, name, sourceBytes[index === 2 ? 0 : 1]);
+const endBook = (rows) => rows.find((row) => row.directory === endFolder);
+const standard = endBook(await scanPdfFolders(library));
+await savePdfFolder(standard, (sources) => mergePdfFiles(sources, PDFLib));
+
+const options = { coversAtEnd: true, coverCount: 3 };
+const reordered = endBook(await scanPdfFolders(library, options));
+const expected = [...trailingNames.slice(-3), ...trailingNames.slice(0, -3)];
+assert.deepEqual(reordered.sources.map(({ name }) => name), expected);
+assert.equal(reordered.status, 'pending', 'an output saved in a different order is ready to rebuild');
+await savePdfFolder(reordered, (sources) => {
+  assert.deepEqual(sources.map(({ name }) => name), expected, 'save uses the order shown in the list');
+  return mergePdfFiles(sources, PDFLib);
+});
+assert.equal(endBook(await scanPdfFolders(library, options)).status, 'done');
+assert.equal(endBook(await scanPdfFolders(library)).status, 'done', 'a saved version for the previous order is still available');
+assert.deepEqual(endBook(await scanPdfFolders(library, { ...options, coverCount: 1 })).sources.map(({ name }) => name),
+  [trailingNames.at(-1), ...trailingNames.slice(0, -1)]);
+
+const namedFolder = library.add(directory('Named cover and thumbnails'));
+const namedSources = ['Z Front Cover.pdf', 'Y Cover thumb1.pdf', 'Y Thumbnail 2.pdf', 'Worksheet 2.pdf', 'Worksheet 10.pdf'];
+for (const name of namedSources.toReversed()) await put(namedFolder, name, sourceBytes[0]);
+assert.deepEqual((await scanPdfFolders(library)).find((row) => row.directory === namedFolder).sources.map(({ name }) => name),
+  namedSources, 'recognized covers and thumbnails come first by default');
+
+console.log('PDF merge QA passed: original content, editable fields, nested saves, and cover and thumbnail order.');
