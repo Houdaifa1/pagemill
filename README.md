@@ -2,7 +2,7 @@
 
 **A stack of page images in, a finished PDF out.**
 
-Bindery turns folders of book pages into PDFs directly in your browser. Choose one
+Bindery turns folders of book pages into PDFs and combines existing PDFs directly in your browser. Choose one
 book or a library of books, set the cover and page options, and let it work through
 the queue. PDFs stay beside the original images unless you choose another output folder.
 
@@ -10,6 +10,21 @@ The images stay on your computer. Bindery has no server, account, upload, or
 database. The browser reads and writes the folder you choose.
 
 ## Use it
+
+Choose **Merge PDFs**, then **Choose folder** to select a library in Chrome or Edge.
+Each folder with at least two source PDFs becomes one result. Files named like
+`Cover.pdf` come first, followed by the remaining filenames in natural order.
+Choose **Merge all pending** or merge an individual folder. Bindery saves
+`Folder name - Merged.pdf` beside the source files. Rebuilding gets a new filename,
+so existing copies with filled answers are protected. All source pages keep their
+original order within each PDF, dimensions, and content. Standard PDF form
+fields stay editable and retain their current values. Duplicate field names in
+different files are made unique so one worksheet's answers do not populate another.
+Signed, password-protected, and XFA PDFs require their original document. Bindery
+also flags scripts that would lose their original scope in the merged file. The
+files stay on your device.
+
+### Build PDFs from images
 
 Open [bindery.houdaifa.dev](https://bindery.houdaifa.dev) in Chrome or Edge, then
 select a folder containing JPG or PNG pages. Each folder with page images is
@@ -56,8 +71,7 @@ A folder counts as finished only once Bindery has built it, so images beside a
 PDF still show as pending. Added pages keep their own size, numbering, and text. A password-protected or
 damaged key fails only that book, by name, and writes nothing for it.
 
-Firefox and Safari cannot grant the folder access this app needs. Use a recent
-Chromium browser.
+Use Chrome or Edge for folder access.
 
 ## Run locally
 
@@ -74,7 +88,7 @@ file will not give the app the browser permissions it needs.
 
 | Path | Purpose |
 | --- | --- |
-| `index.html`, `css/` | Page and styling |
+| `index.html`, `merge/`, `css/` | Pages and styling |
 | `js/` | Folder scanning, PDF creation, OCR, and UI |
 | `vendor/tesseract/` | Pinned OCR runtime and English model |
 | `test/` | Browser checks and Node tests |
@@ -92,7 +106,7 @@ npm test
 npm run build
 ```
 
-`npm test` checks page ordering, archive extraction, output paths, skipped pages, previews, and answer keys. For the browser checks,
+`npm test` checks page ordering, archive extraction, output paths, skipped pages, previews, answer keys, and fillable PDF merges. For the browser checks,
 visit `/test/test.html` on your local server. Optional PDF fixtures live in
 `test/build-*.mjs`; the OCR and page-numbering fixtures need
 `BINDERY_QA_BOOK` set to a local folder of page images. Generated PDFs and test

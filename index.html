@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Bindery — Turn image folders into PDFs</title>
-<meta name="description" content="Convert folders of book-page images into print-ready PDFs, entirely in your browser. Nothing is ever uploaded." />
+<title>Bindery — Build and merge PDFs</title>
+<meta name="description" content="Build PDFs from image folders or merge fillable PDFs, entirely in your browser." />
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -110,6 +110,10 @@
           <i data-lucide="folder" class="h-3.5 w-3.5 shrink-0"></i>
           <span id="folder-path-name" class="max-w-[220px] truncate"></span>
         </div>
+        <a href="/merge/" class="inline-flex items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 px-3.5 py-2 text-sm font-medium text-canvas-700 dark:text-canvas-200 transition-colors hover:bg-canvas-100 dark:hover:bg-canvas-800">
+          <i data-lucide="files" class="h-4 w-4" aria-hidden="true"></i>
+          <span>Merge PDFs</span>
+        </a>
         <button id="extract-archives-btn" type="button"
           class="inline-flex items-center gap-2 rounded-lg border border-canvas-200 dark:border-canvas-800 bg-transparent px-3.5 py-2 text-sm font-medium text-canvas-700 dark:text-canvas-200 transition-colors duration-150 hover:bg-canvas-100 dark:hover:bg-canvas-800 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40">
           <i data-lucide="archive-restore" class="h-4 w-4"></i>

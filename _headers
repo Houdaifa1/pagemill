@@ -4,6 +4,9 @@
 /index.html
   Cache-Control: no-store, max-age=0
 
+/merge/*
+  Cache-Control: no-store, max-age=0
+
 /js/*
   Cache-Control: no-store, max-age=0
 

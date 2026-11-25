@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Merge PDFs · Bindery</title>
+  <meta name="description" content="Merge covers and worksheets by folder while keeping original page sizes and fillable fields." />
+  <link rel="stylesheet" href="/css/styles.css" />
+  <link rel="stylesheet" href="/css/merge.css" />
+  <script defer src="/js/lucide.min.js?v=20260901-1"></script>
+  <script type="module" src="/js/merge-app.js"></script>
+</head>
+<body class="merge-page">
+  <header class="merge-header">
+    <a class="merge-brand" href="/">
+      <span class="merge-logo"><i data-lucide="library-big" aria-hidden="true"></i></span>
+      Bindery
+    </a>
+    <nav class="merge-nav" aria-label="PDF tools">
+      <a href="/">Images to PDF</a>
+      <a href="/merge/" aria-current="page">Merge PDFs</a>
+    </nav>
+  </header>
+
+  <main class="merge-main">
+    <div class="merge-intro">
+      <h1>Merge PDFs</h1>
+      <p>Choose a library folder. Each folder with at least two PDFs gets one merged file beside its originals. Pages keep their original size and fillable fields.</p>
+    </div>
+
+    <section class="merge-panel" aria-label="PDF library">
+      <div id="merge-empty" class="merge-empty">
+        <span class="merge-file-icon"><i data-lucide="folder-open" aria-hidden="true"></i></span>
+        <h2>No folder selected</h2>
+        <button id="choose-pdf-folder" class="merge-primary" type="button">Choose folder</button>
+      </div>
+
+      <div id="merge-library" hidden>
+        <div class="merge-library-heading">
+          <div class="merge-library-name">
+            <h2 id="merge-root-name"></h2>
+            <p id="merge-count"></p>
+          </div>
+          <button id="change-pdf-folder" class="merge-secondary" type="button">Change folder</button>
+          <button id="rescan-pdf-folders" class="merge-secondary" type="button">Rescan</button>
+          <button id="merge-all-pdfs" class="merge-primary" type="button">Merge all pending</button>
+        </div>
+        <ul id="merge-folders" class="merge-folders"></ul>
+        <p id="merge-no-folders" class="merge-no-folders" hidden>No folders contain two or more source PDFs.</p>
+      </div>
+    </section>
+    <div class="merge-feedback">
+      <p id="merge-status" role="status"></p>
+      <p id="merge-error" role="alert"></p>
+    </div>
+    <p class="merge-privacy"><i data-lucide="shield-check" aria-hidden="true"></i> Your PDFs stay on this device.</p>
+  </main>
+
+  <template id="merge-folder-row">
+    <li>
+      <div class="merge-folder-info">
+        <p class="merge-folder-path"></p>
+        <details class="merge-source-details">
+          <summary></summary>
+          <ol></ol>
+        </details>
+        <p class="merge-folder-error"></p>
+      </div>
+      <div class="merge-folder-actions">
+        <span class="status-pill"></span>
+        <button class="merge-secondary" type="button"></button>
+      </div>
+    </li>
+  </template>
+</body>
+</html>
